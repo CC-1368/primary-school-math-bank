@@ -23,8 +23,8 @@ from mathbank.ai_http import post_chat_completion
 from mathbank.ai_json import parse_ai_json
 from mathbank.ai_providers import apply_model_thinking_policy, apply_structured_output_policy, resolve_ocr_provider
 from mathbank.pdf_layout import (
-    apply_figure_anchors, crop_pdf_figure, inspect_pdf_page, refine_figure_bbox, normalize_model_bbox,
-    scan_background_candidate_ids,
+    apply_figure_anchors, crop_pdf_figure, inspect_pdf_page, page_furniture_reason, refine_figure_bbox,
+    normalize_model_bbox, scan_background_candidate_ids, tighten_figure_bbox,
 )
 from mathbank.prompts import build_pdf_layout_prompt, PDF_STRUCTURED_OUTPUT_INSTRUCTIONS
 from mathbank.pdf_vision_request import (
@@ -52,7 +52,8 @@ def describe_figure_slots(source: str, page_index: int) -> list[dict]:
 
 
 def _is_processing_note(message: str) -> bool:
-    return message.startswith(("已按原生候选 ", "已补全 ", "小边距会超过扩张上限或碰到其他文字，已保留当前边界。",
+    return message.startswith(("已按原生候选 ", "已补全 ", "已收缩配图边界", "已把配图边界扩展到原生图形范围。",
+                               "小边距会超过扩张上限或碰到其他文字，已保留当前边界。",
                                "检测到接近整页的图片，须从原页识别独立插图"))
 
 
@@ -241,11 +242,22 @@ def _validate_layout(result: dict, page_info: dict, *, notes: list[str] | None =
             and candidate["bbox"] == bbox for candidate in page_info.get("candidates", [])
         ))
         model_bbox = item.get("model_bbox") if native_box else list(bbox)
-        refined = refine_figure_bbox(page_info, bbox, [identifier for identifier in candidate_ids if identifier not in background_ids])
+        owned_ids = [identifier for identifier in candidate_ids if identifier not in background_ids]
+        # A model rectangle is generous by nature: pull it back onto the native
+        # geometry before repair, so option rows / the next stem never ship.
+        tightened = tighten_figure_bbox(page_info, bbox, owned_ids)
+        bbox = tightened["bbox"]
+        for message in tightened["warnings"]:
+            (notes if _is_processing_note(message) else warnings).append(message)
+        refined = refine_figure_bbox(page_info, bbox, owned_ids)
         bbox = refined["bbox"]
         x0, y0, x1, y1 = bbox
         for message in refined["warnings"]:
             (notes if _is_processing_note(message) else warnings).append(message)
+        furniture = page_furniture_reason(page_info, bbox)
+        if furniture:
+            warnings.append(f"配图区域是页面装饰（{furniture}），已忽略，请对照原页确认该题是否漏图。")
+            continue
         # A claimed ID is evidence only when the proposed region actually
         # intersects it. Models cannot satisfy coverage by listing all IDs.
         for candidate in page_info.get("candidates", []):

@@ -108,7 +108,7 @@ def main():
         description="Fuzzy query tool to fetch mathematical questions from local SQLite DB for AI referencing."
     )
     parser.add_argument("-q", "--query", type=str, help="Search term (fuzzy matches compulsory, chapter, knowledge, content, etc.)")
-    parser.add_argument("-t", "--type", type=str, choices=["single_choice", "multi_choice", "fill_in_blank", "detailed_answer"], help="Filter by question type")
+    parser.add_argument("-t", "--type", type=str, choices=["single_choice", "multi_choice", "fill_in_blank", "true_false", "detailed_answer"], help="Filter by question type")
     parser.add_argument("-d", "--difficulty", type=str, choices=["easy", "medium", "hard"], help="Filter by difficulty")
     parser.add_argument("-n", "--limit", type=int, default=50, help="Max number of questions to return. Use -1 for no limit (default: 50)")
     parser.add_argument("-a", "--with-answers", action="store_true", help="Include answers and explanations in the output")

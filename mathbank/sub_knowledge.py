@@ -9,6 +9,8 @@ import json
 import re
 from pathlib import Path
 
+from mathbank.curriculums import normalize_version_code
+
 
 MAX_SUB_KNOWLEDGE_ITEMS = 64
 MAX_SUB_KNOWLEDGE_LENGTH = 100
@@ -65,19 +67,18 @@ def read_sub_knowledge(value) -> list[dict[str, str]]:
 
 
 def detect_curriculum_version(metadata, *, strict: bool = False) -> str:
-    """Use the existing service's preset detection, without importing main."""
+    """Prefer preset identity; retain chapter detection for legacy metadata."""
+
+    if isinstance(metadata, dict) and "curriculum_version" in metadata:
+        version = metadata["curriculum_version"]
+        if not isinstance(version, str) or not version.strip():
+            raise ValueError("curriculum_version 必须是有效的教材版本编码")
+        return normalize_version_code(version)
 
     curriculum = metadata.get("curriculum", {}) if isinstance(metadata, dict) else {}
     chapters = " ".join(str(chapter) for book in curriculum.values()
                         if isinstance(book, dict) for chapter in book) if isinstance(curriculum, dict) else ""
-    if "第一章" in chapters:
-        return "B"
-    if any(marker in chapters for marker in (
-        "第 1 章 集合与逻辑", "数学建模活动案例", "第 2 章 等式与不等式", "第 3 章 幂、指数与对数",
-    )):
-        return "H"
-    if "第1章" in chapters:
-        return "S"
+    # 本发行版只保留人教版目录，历史元数据一律回落到人教版。
     if strict and not re.search(r"(?:^|\s)\d+\.\s*\S", chapters):
         raise ValueError("无法从对应元数据明确识别教材版本")
     return "A"
@@ -89,8 +90,10 @@ def resolve_active_version(metadata_path=None, *, strict: bool = False) -> str:
         metadata_path = DATA_BACKUP_DIR / "custom_metadata.json"
     try:
         metadata = json.loads(Path(metadata_path).read_text(encoding="utf-8"))
-        return detect_curriculum_version(metadata, strict=strict)
     except (OSError, ValueError, TypeError) as exc:
         if strict:
             raise ValueError("对应数据库的教材元数据缺失、无效或无法识别") from exc
         return "A"
+    # An explicit but invalid identity must never silently select another
+    # version, including for ordinary exports that use non-strict resolution.
+    return detect_curriculum_version(metadata, strict=strict)

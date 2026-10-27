@@ -67,7 +67,7 @@ def test_exam_19_keeps_existing_builtin_sections_and_fixed_numbers():
     reversed_order = ["detailed_answer", "fill_in_blank", "multi_choice", "single_choice", "calculation"]
     tex = build_latex_document("高考", "", "exam_19", data, question_types=TYPES, section_order=reversed_order)
     assert tex == build_latex_document("高考", "", "exam_19", data)
-    assert paper_type_order(["proof", "calculation"], "exam_19", TYPES) == ["single_choice", "multi_choice", "fill_in_blank", "detailed_answer"]
+    assert paper_type_order(["proof", "calculation"], "exam_19", TYPES) == ["single_choice", "multi_choice", "fill_in_blank", "true_false", "detailed_answer"]
     docx, _ = build_word_document("高考", "", "exam_19", data, question_types=TYPES, section_order=reversed_order)
     text = "\n".join(p.text for p in Document(io.BytesIO(docx)).paragraphs)
     assert re.findall(r"^(\d+)\. STEM", text, re.M) == ["1", "9", "12", "15"]
@@ -91,11 +91,11 @@ def test_frontend_type_order_matches_backend_including_old_numeric_and_prototype
     script += """
 const present = ['calculation','20','3','__proto__','proof','calculation'];
 const actual = getPaperTypeOrder(present, 'quiz');
-const expected = ['single_choice','multi_choice','fill_in_blank','detailed_answer','proof','calculation','20','3','__proto__'];
+const expected = ['single_choice','multi_choice','fill_in_blank','true_false','detailed_answer','proof','calculation','20','3','__proto__'];
 if (JSON.stringify(actual) !== JSON.stringify(expected)) throw new Error(actual);
 if (getQuestionTypeCn('__proto__') !== '__proto__') throw new Error('prototype label');
 if (!isWrittenQuestionType('calculation') || isWrittenQuestionType('fill_in_blank')) throw new Error('layout');
-if (getPaperTypeOrder(present, 'exam_19').length !== 4) throw new Error('exam19');
+if (getPaperTypeOrder(present, 'exam_19').length !== 5) throw new Error('exam19');
 """
     result = subprocess.run([shutil.which("node"), "-e", script], capture_output=True, text=True, timeout=10)
     assert result.returncode == 0, result.stderr
@@ -179,7 +179,7 @@ def test_partial_and_malformed_order_cannot_drop_new_types():
     order = ["calculation", None, ["proof"], "calculation", "", "single_choice"]
     assert normalize_section_order(order) == ["calculation", "single_choice"]
     assert paper_type_order(present, "quiz", TYPES, order) == [
-        "calculation", "single_choice", "multi_choice", "fill_in_blank", "detailed_answer", "proof", "历史题型",
+        "calculation", "single_choice", "multi_choice", "fill_in_blank", "true_false", "detailed_answer", "proof", "历史题型",
     ]
     assert paper_type_order(present, "quiz", TYPES, "broken") == paper_type_order(present, "quiz", TYPES)
 
@@ -205,7 +205,7 @@ const before=getPaperCartSignature();
 window.movePaperSection('calculation','up');
 const order=window.PaperStore.meta.section_order;
 assert(order.indexOf('calculation')<order.indexOf('single_choice'));
-assert.deepEqual(order,['calculation','single_choice','multi_choice','fill_in_blank','detailed_answer','proof']);
+assert.deepEqual(order,['calculation','single_choice','multi_choice','fill_in_blank','true_false','detailed_answer','proof']);
 assert.notEqual(before,getPaperCartSignature());
 assert.equal(JSON.stringify(window.PaperStore.cart),originalCart);
 assert.deepEqual(saved.section_order,order);
@@ -217,7 +217,7 @@ assert.equal(current,getPaperCartSignature());
 window.PaperStore.meta.paper_type='exam_19';
 window.movePaperSection('proof','up');
 assert.deepEqual(window.PaperStore.meta.section_order,order);
-assert.deepEqual(getPaperTypeOrder(['proof'],'exam_19',order),['single_choice','multi_choice','fill_in_blank','detailed_answer']);
+assert.deepEqual(getPaperTypeOrder(['proof'],'exam_19',order),['single_choice','multi_choice','fill_in_blank','true_false','detailed_answer']);
 window.PaperStore.meta.paper_type='exam';
 window.movePaperSection('calculation','down');
 assert(window.PaperStore.meta.section_order.indexOf('single_choice')<window.PaperStore.meta.section_order.indexOf('calculation'));

@@ -22,7 +22,7 @@ def test_formula_producing_prompts_share_context_aware_fraction_rule():
         build_import_parse_system_prompt(curriculum),
     ]
     for question_type in (
-        "single_choice", "multi_choice", "fill_in_blank", "detailed_answer"
+        "single_choice", "multi_choice", "fill_in_blank", "true_false", "detailed_answer"
     ):
         system_prompt, user_prompt = build_ai_solve_prompts(
             question_type, r"求 $\frac{x+1}{x-1}$"
@@ -168,10 +168,12 @@ def test_single_question_classification_prompt_requests_only_coarse_question_for
     assert '"chapter"' in prompt
     assert '"question_form"' in prompt
     assert "question_type" not in prompt
-    assert "包含且仅包含以下四个 key" in prompt
+    assert "包含且仅包含以下五个 key" in prompt
     assert "真实小节" in prompt and "整章定位/待细分" in prompt
     assert '"knowledge"' in prompt and "1.1 集合的概念" in prompt
     assert "任何选择题一律为 `choice`" in prompt
+    assert "判断题（正误题/对错题）为 `true_false`" in prompt
+    assert "true_false" in prompt and "正确/错误（√/×）" in prompt
     assert "严禁输出或猜测 `single_choice`、`multi_choice`" in prompt
     assert "JSON插入顺序" in prompt and "裸章节编号" in prompt
     assert "唯一且有依据的小节" in prompt and "整章待细分" in prompt
@@ -185,3 +187,20 @@ def test_import_prompts_return_single_leaf_or_whole_chapter_pending():
         assert '"category_knowledge"' in prompt
         assert "2.1 概念" in prompt
         assert "空字符串" in prompt and "不得猜测" in prompt
+
+
+def test_every_import_prompt_lets_the_model_judge_true_false():
+    """判断题必须由模型判定，不能只靠原卷分节标题。"""
+
+    curriculum = {"二年级上册": {"1. 表内乘法": ["1.1 乘法的初步认识"]}}
+    for prompt in (
+        build_pdf_parse_system_prompt(curriculum, False),
+        build_pdf_parse_system_prompt(curriculum, True),
+        build_import_parse_system_prompt(curriculum, "markdown"),
+        build_import_parse_system_prompt(curriculum, "tex"),
+    ):
+        assert "true_false" in prompt
+        assert "判断题判定" in prompt
+        assert "正确/错误" in prompt
+        assert "detailed_answer" in prompt
+

@@ -21,7 +21,7 @@ With just basic LaTeX math formula syntax, MathBank empowers frontline math teac
 - 🎨 **1:1 A4 Simulation Exam Layout**: Provides an intuitive exam paper canvas just like Word, complete with sealing line, title, and notice box. Supports drag-and-drop sorting, question blank space height adjustment, and one-click switching to A3 answer sheet or Gaokao 19-question preset.
 - ⚡ **Second-Level Formula Rendering & Exam-Level Export**: Built-in professional math formula typesetting engine with real-time web preview. Choice options adapt to 4, 2, or 1 columns according to their rendered widths. Long text wraps naturally in a single column; only an indivisible formula wider than its column scrolls horizontally, without reducing the font size. Question-bank, draft, and detail previews retain the complete stem, every option, and their pictures. Supports one-click export of high-definition PDFs matching National College Entrance Examination (Gaokao) standards and complete LaTeX source packages.
 - 🤖 **AI Intelligent Exam Generation & Solving Assistance**: Built-in Large Language Models (DeepSeek, etc.) automatically select questions and generate exams based on knowledge point breakdown tables and difficulty gradients; supports single-question AI generation of detailed solutions and teaching reflections.
-- 📚 **One-Click Switching Across Major Curriculum Outlines**: Natively preloaded with standard High School curriculum outlines: **PEP A (人教A版)**, **PEP B (人教B版)**, **Jiangsu (苏教版)**, and **Shanghai (沪教版)**. Changing outlines automatically and intelligently maps questions without manual re-organization.
+- 📚 **PEP Grades 1-6 Curriculum**: Ships with the complete PEP (人教版) outline of 12 volumes (104 chapters / 294 sections); every question is filed under volume → chapter → section.
 - 📄 **Multi-Format Exam Smart Parsing & PDF Dual-Strategy Route**: Supports direct drag-and-drop of **LaTeX source (.tex)**, **Markdown (.md)**, **PDF exams (.pdf)**, or **Word documents (.docx)** for fast intelligent slice parsing. Markdown support is still experimental: carefully check each question, formula, image, and answer association before importing. PDF parsing natively offers dual strategies: **[Native Vector Text & Formula Extraction] (Default Recommended)** and **[Full-Page Visual OCR]**. Primary recommendation is native extraction using `PDF Inspector` for sub-second, 0-visual-token loss extraction; if images cause missing formulas, the system smoothly falls back to VLM visual OCR completion; full-page visual OCR and source-page review prompts remain available for unusually formatted exams; model output still needs to be checked against the original paper. Word import structurally converts Office OMML and parses MathType structures from OLE `Equation Native` streams, preserving preview images with manual audit tags for non-high-confidence formulas.
 
 ---
@@ -273,7 +273,7 @@ The tree below describes the **source repository** and its runtime data location
 │   ├── mtef_helper.py          # MathType OLE/MTEF v5 parser & diagnostics
 │   ├── docx_helper.py          # Word text/table/image extractor & report
 │   ├── pdf_inspector_helper.py # PDF Inspector vector text extraction
-│   └── resources/curriculums/  # Shared JSON outlines for A/B/S/H editions
+│   └── resources/curriculums/  # A.json — shared PEP grades 1-6 outline
 ├── scripts/                    # Maintenance, migration, search & release tools
 │   ├── search_questions.py
 │   ├── backup.py

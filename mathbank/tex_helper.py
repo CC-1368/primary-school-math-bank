@@ -303,6 +303,42 @@ def expand_safe_macros(body: str, definitions: list[MacroDefinition]) -> tuple[s
     return source, total, sorted(set(unsupported))
 
 
+_CHOICE_ENV_RE = re.compile(r"\\begin\{choices\}(?:\[[^\]]*\])?([\s\S]*?)\\end\{choices\}")
+# 选项正文开头重复的原卷标号：A. / A． / A) / A） / A： / (A) / （A）/ A、
+# 「A、B 两点」这类正文开头的列举不能误删，因此「、」后紧跟 A–H 字母时不匹配。
+_CHOICE_ITEM_LABEL_RE = re.compile(
+    r"^[ \t\u3000]*(?:[（(][ \t]*[A-Ha-h][ \t]*[)）]|[A-Ha-h][ \t]*[.．:：)）]|[A-Ha-h][ \t]*、(?![A-Ha-h]))[ \t\u3000]*"
+)
+
+
+def strip_choice_item_labels(content: str) -> str:
+    """删除 choices 环境内 \\item 后重复的 A./B. 原卷标号。
+
+    前端卡片、A4 预览与 LaTeX/Word 模板都会按顺序自动生成 A. B. C. D.，
+    如果模型或 OCR 又把原卷标号抄进 \\item 正文，就会显示成「A. A. 3元」。
+    这里只处理 choices 环境内的 \\item 开头，要求标号后带分隔符，且删除后
+    仍有正文，避免误伤「A、B 两点」这类正常选项文字。
+    """
+    if not content or not isinstance(content, str) or "\\begin{choices}" not in content:
+        return content
+
+    def fix_block(match: re.Match) -> str:
+        whole = match.group(0)
+        inner = match.group(1)
+        pieces = re.split(r"(\\item\b[ \t\u3000]*)", inner)
+        for index in range(1, len(pieces) - 1, 2):
+            body = pieces[index + 1]
+            stripped = _CHOICE_ITEM_LABEL_RE.sub("", body, count=1)
+            if stripped.strip():
+                pieces[index + 1] = stripped
+        fixed_inner = "".join(pieces)
+        start = match.start(1) - match.start(0)
+        end = match.end(1) - match.start(0)
+        return whole[:start] + fixed_inner + whole[end:]
+
+    return _CHOICE_ENV_RE.sub(fix_block, content)
+
+
 def _normalise_choice_commands(body: str) -> tuple[str, int]:
     converted = 0
 

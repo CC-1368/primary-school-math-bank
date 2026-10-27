@@ -1,6 +1,8 @@
 import ast
 import asyncio
 
+import pytest
+
 from mathbank.curriculums import get_curriculum_preset, load_curriculum
 from mathbank.paths import (
     CURRICULUMS_DIR,
@@ -41,13 +43,19 @@ def test_shared_paths_are_absolute_and_project_anchored():
     assert STATIC_DIR.parent == PROJECT_ROOT
 
 
-def test_all_curriculum_presets_load_from_resources():
-    for version in ("A", "B", "S", "H"):
-        preset = get_curriculum_preset(version)
-        assert preset["version"] == version
-        assert preset["metadata"]["curriculum"] == load_curriculum(version)
-        assert preset["metadata"]["question_types"]
-        assert preset["metadata"]["difficulties"]
+def test_only_pep_curriculum_resource_is_shipped():
+    """教材版本切换已下线，只保留人教版大纲资源。"""
+    preset = get_curriculum_preset("A")
+    assert preset["version"] == "A"
+    assert preset["metadata"]["curriculum"] == load_curriculum("A")
+    assert preset["metadata"]["question_types"]
+    assert preset["metadata"]["difficulties"]
+
+    shipped = sorted(p.stem for p in CURRICULUMS_DIR.glob("*.json"))
+    assert shipped == ["A"]
+    for removed in ("B", "S", "H"):
+        with pytest.raises(ValueError):
+            load_curriculum(removed)
 
 
 def test_solve_prompt_builder_preserves_required_structure():

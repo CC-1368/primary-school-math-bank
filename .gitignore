@@ -118,3 +118,10 @@ tests/artifacts/*
 /tests/test_question_exchange.py
 /scripts/migrate_word_math_private_chars.py
 /tests/test_migrate_word_math_private_chars.py
+
+# ==== 本地化改造：排除运行时与备份 ====
+python/
+tools/cloudflared.exe
+*.bak
+*.bak-*
+logs/

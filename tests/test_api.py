@@ -353,6 +353,17 @@ def test_api_metadata_config(client):
     assert "difficulties" in data
     assert "curriculum" in data
 
+    # 题型标签必须中文且覆盖五种标准题型（避免界面回退显示 true_false 代码）
+    type_labels = {item["value"]: item["label"] for item in data["question_types"]}
+    for value, label in (
+        ("single_choice", "单选题"),
+        ("multi_choice", "多选题"),
+        ("fill_in_blank", "填空题"),
+        ("true_false", "判断题"),
+        ("detailed_answer", "解答题"),
+    ):
+        assert type_labels.get(value) == label
+
     # 保存原始配置以便还原
     original_config = data
 
@@ -382,17 +393,10 @@ def test_api_metadata_config(client):
         client.post("/api/config/metadata", json=original_config, headers=headers)
 
 
-def test_curriculum_preset_api(client):
-    for version in ("A", "B", "S", "H"):
-        response = client.get(f"/api/config/curriculum-presets/{version}")
-        assert response.status_code == 200
-        data = response.json()
-        assert data["version"] == version
-        assert data["name"]
-        assert data["metadata"]["curriculum"]
-
-    response = client.get("/api/config/curriculum-presets/unknown")
-    assert response.status_code == 404
+def test_curriculum_switch_removed(client):
+    """教材版本切换已下线，预设接口不再暴露。"""
+    for version in ("A", "B", "S", "H", "unknown"):
+        assert client.get(f"/api/config/curriculum-presets/{version}").status_code == 404
 
 
 def test_pdf_task_and_crop(client):
@@ -1007,3 +1011,39 @@ def test_deepseek_ocr_model_rejects_env_line_injection(client, tmp_path, monkeyp
     assert response.status_code == 500
     assert '换行' in response.json()['message']
     assert env_path.read_text() == 'DEEPSEEK_OCR_MODEL=deepseek-flash\n'
+
+
+def test_create_question_strips_duplicate_choice_item_labels(client):
+    """导入/保存的最后一道防线：choices 选项不保留原卷 A./B. 标号。"""
+    headers = {"X-Local-Token": LOCAL_TOKEN}
+    payload = {
+        "content": (
+            "下列小数中，与0.7相等的是（　　　）。\n"
+            "\\begin{choices}\n"
+            "\\item A. 0.07\n"
+            "\\item B. 0.70\n"
+            "\\item C. 7.0\n"
+            "\\item D. 0.69\n"
+            "\\end{choices}"
+        ),
+        "question_type": "single_choice",
+        "category_compulsory": "必修一",
+        "category_chapter": "第一章",
+        "category_knowledge": "勾股定理",
+        "difficulty": "normal",
+        "source": "单元测试",
+        "answer_markdown": "B",
+        "image_paths": "[]",
+    }
+    response = client.post("/api/questions", data=payload, headers=headers)
+    assert response.status_code == 200
+    question_id = response.json()["question"]["id"]
+    try:
+        stored = client.get(f"/api/questions/{question_id}").json()
+        content = stored["content"]
+        assert content.count("\\item") == 4
+        assert "\\item 0.07" in content
+        assert "A. 0.07" not in content
+        assert "B. 0.70" not in content
+    finally:
+        client.delete(f"/api/questions/{question_id}", headers=headers)

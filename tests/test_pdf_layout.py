@@ -17,8 +17,10 @@ from mathbank.pdf_layout import (
     crop_pdf_figure,
     inspect_pdf_page,
     normalize_model_bbox,
+    page_furniture_reason,
     refine_figure_bbox,
     scan_background_candidate_ids,
+    tighten_figure_bbox,
 )
 
 
@@ -465,3 +467,144 @@ def test_native_option_markers_are_not_mistaken_for_clipped_vertex_labels():
     result = refine_figure_bbox(info, [207, 398, 401, 532], ["imageA"])
     assert not any("短标签" in message for message in result["warnings"])
     assert result["bbox"][0] > 200
+
+
+def test_page_furniture_rejects_banner_above_the_first_question():
+    # 龙岩漳平卷: vision returned the running head + unit banner as the figure
+    # of "下面哪组分法是平均分".
+    info = {"width": 595, "height": 842, "candidates": [], "text_blocks": [
+        {"bbox": [80, 292, 480, 300], "text": "1.（龙岩漳平）下面哪组分法是平均分？"},
+        {"bbox": [80, 360, 480, 368], "text": "2.（福州闽清）"},
+    ]}
+    assert page_furniture_reason(info, [87, 53, 488, 153]) == "位于本页第一道题上方"
+    # A figure inside question 1 sits below that anchor and stays untouched.
+    assert page_furniture_reason(info, [120, 305, 460, 350]) == ""
+
+
+def test_page_furniture_rejects_score_table_and_unit_banner_by_text():
+    info = {"width": 595, "height": 842, "candidates": [], "text_blocks": [
+        {"bbox": [80, 200, 460, 230], "text": "题号 一 二 三 四 五 六 附加题 总分"},
+        {"bbox": [80, 232, 460, 250], "text": "得分"},
+        {"bbox": [80, 40, 470, 130], "text": "小学数学二年级 上册 第三单元核心素养测评"},
+        {"bbox": [80, 400, 300, 408], "text": "1. 看图列式。"},
+    ]}
+    assert page_furniture_reason(info, [90, 195, 465, 255]) == "得分统计表"
+    assert page_furniture_reason(info, [90, 45, 470, 130]) == "卷头标题横幅"
+
+
+def test_page_furniture_keeps_wide_illustration_below_the_question_anchor():
+    info = {"width": 595, "height": 842, "candidates": [], "text_blocks": [
+        {"bbox": [80, 300, 470, 312], "text": "3. 根据下图列式。"},
+    ]}
+    # 15 bones + 3 dogs: wide and flat, but it belongs to question 3.
+    assert page_furniture_reason(info, [112, 320, 497, 340]) == ""
+
+
+def test_page_furniture_ignores_pages_without_text_evidence():
+    assert page_furniture_reason({"width": 595, "height": 842, "text_blocks": []}, [0, 0, 500, 100]) == ""
+    assert page_furniture_reason({"width": 0, "height": 0, "text_blocks": []}, [0, 0, 500, 100]) == ""
+
+
+def test_tighten_drops_option_row_and_next_stem_below_the_native_figure():
+    info = {
+        "width": 600, "height": 800,
+        "candidates": [{"id": "p1_vector_001", "bbox": [100, 100, 400, 300], "type": "vector"}],
+        "text_blocks": [
+            {"bbox": [100, 320, 520, 340], "text": "A. 只有①   B. 只有②   C. 只有③   D. ②和③"},
+            {"bbox": [100, 360, 560, 420], "text": "6. 一辆微型公交车从街心花园出发时车上有 4 个空座位，中途第一次停车时。"},
+            {"bbox": [100, 430, 300, 450], "text": "三 计算题。（共 16 分）"},
+        ],
+    }
+    result = tighten_figure_bbox(info, [95, 95, 525, 455], ["p1_vector_001"])
+    assert result["bbox"] == pytest.approx([100, 100, 400, 300])
+    assert any("已收缩配图边界" in note for note in result["warnings"])
+
+
+def test_tighten_keeps_table_rows_that_live_inside_native_geometry():
+    info = {
+        "width": 600, "height": 800,
+        "candidates": [{"id": "p1_vector_001", "bbox": [100, 100, 400, 400], "type": "vector"}],
+        "text_blocks": [
+            {"bbox": [110, 380, 390, 398], "text": "淘气的零用钱更多 A. 3 元 B. 4 元"},
+            {"bbox": [110, 110, 390, 130], "text": "淘气：80 ÷ 1/4 = 320（元）"},
+        ],
+    }
+    result = tighten_figure_bbox(info, [100, 100, 400, 400], ["p1_vector_001"])
+    assert result["bbox"] == [100, 100, 400, 400]
+    assert result["warnings"] == []
+
+
+def test_tighten_drops_adjacent_column_fragment_outside_the_frame():
+    info = {
+        "width": 600, "height": 800,
+        "candidates": [{"id": "p1_vector_001", "bbox": [200, 100, 400, 300], "type": "vector"}],
+        "text_blocks": [{"bbox": [150, 200, 172, 222], "text": "地"}],
+    }
+    result = tighten_figure_bbox(info, [140, 90, 420, 320], ["p1_vector_001"])
+    assert result["bbox"][0] >= 200
+
+
+def test_tighten_absorbs_in_figure_lettering_beyond_the_native_stroke():
+    info = {
+        "width": 600, "height": 800,
+        "candidates": [{"id": "p1_vector_001", "bbox": [200, 200, 700, 500], "type": "vector"}],
+        "text_blocks": [
+            {"bbox": [186, 330, 210, 350], "text": "甲地"},
+            {"bbox": [150, 420, 190, 440], "text": "山？(4分)"},
+        ],
+    }
+    result = tighten_figure_bbox(info, [140, 180, 760, 560], ["p1_vector_001"])
+    assert result["bbox"][0] == pytest.approx(186)
+    assert result["bbox"][1] == pytest.approx(200)
+
+
+def test_tighten_expands_a_model_box_that_clipped_the_native_figure():
+    info = {
+        "width": 600, "height": 800,
+        "candidates": [{"id": "p1_vector_001", "bbox": [100, 100, 400, 300], "type": "vector"}],
+        "text_blocks": [],
+    }
+    result = tighten_figure_bbox(info, [110, 152, 400, 296], ["p1_vector_001"])
+    assert result["bbox"] == pytest.approx([100, 100, 400, 300])
+    assert any("原生图形范围" in note for note in result["warnings"])
+
+
+def test_tighten_keeps_native_rows_even_when_they_look_like_options():
+    info = {
+        "width": 600, "height": 800,
+        "candidates": [{"id": "p1_vector_001", "bbox": [100, 100, 400, 400], "type": "vector"}],
+        "text_blocks": [{"bbox": [100, 380, 500, 400], "text": "A. 3  B. 4  C. 5  D. 6"}],
+    }
+    result = tighten_figure_bbox(info, [100, 100, 400, 400], ["p1_vector_001"])
+    assert result["bbox"] == [100, 100, 400, 400]
+
+
+def test_tighten_without_native_evidence_is_a_no_op():
+    info = {"width": 600, "height": 800, "candidates": [], "text_blocks": [
+        {"bbox": [100, 320, 520, 340], "text": "A. 只有①   B. 只有②"}]}
+    assert tighten_figure_bbox(info, [95, 95, 525, 455], [])["bbox"] == [95, 95, 525, 455]
+
+
+def test_tighten_rejects_evidence_that_disagrees_with_the_model_box():
+    info = {"width": 600, "height": 800, "text_blocks": [],
+            "candidates": [{"id": "p1_vector_001", "bbox": [60, 280, 420, 460], "type": "vector"}]}
+    result = tighten_figure_bbox(info, [100, 300, 300, 420], ["p1_vector_001"])
+    assert result["bbox"] == [100, 300, 300, 420]
+    assert any("差异过大" in warning for warning in result["warnings"])
+
+
+def test_real_pdf_tighten_excludes_option_line_and_next_question(tmp_path):
+    with fitz.open() as document:
+        page = document.new_page(width=300, height=400)
+        page.draw_rect(fitz.Rect(30, 60, 270, 150), color=(0, 0, 0))
+        page.insert_text((35, 140), "A", fontsize=10)
+        page.insert_text((30, 190), "A. only one   B. only two", fontsize=10)
+        page.insert_text((30, 220), "6. A mini bus starts with 4 empty seats.", fontsize=10)
+        info = inspect_pdf_page(page, 0)
+        figure = next(candidate for candidate in info["candidates"] if candidate["type"] == "vector")
+        result = tighten_figure_bbox(info, [0, 50, 1000, 700], [figure["id"]])
+        url = crop_pdf_figure(page, result["bbox"], tmp_path, "/static/uploads/tmp", "tight")
+    assert result["bbox"] == pytest.approx([100, 150, 900, 375], abs=0.01)
+    with Image.open(tmp_path / Path(url).name) as image:
+        # 90pt tall figure at 200dpi: a page-bottom crop would be far taller.
+        assert image.height < 320

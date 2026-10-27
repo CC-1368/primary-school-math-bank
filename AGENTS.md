@@ -6,7 +6,7 @@
 ## 2. 核心技术栈
 本项目追求极简配置与极致体验，严格遵循以下技术选型，**不要引入复杂的现代前端构建工具（如 Webpack/Vite/Node.js 生态）**：
 - **后端**：Python + FastAPI。
-- **后端渐进式模块架构**：根目录 `main.py` 继续作为 `uvicorn main:app` 兼容入口；后端领域能力统一集中在 `mathbank/`。`database.py` 提供 SQLite ORM 与 Session，`db_migrations.py` 提供版本化、备份优先的数据库迁移，`backup.py` 提供带清单校验的完整备份与恢复，`asset_security.py` 统一校验上传内容与本地资产路径，`task_manager.py` 提供有界异步任务、协作取消与临时资源生命周期，`health.py` 提供启动就绪诊断，`paper_helper.py` 提供 LaTeX/PDF 编译排版，`sync_helper.py` 只负责 JSON 同步导出与 AI 题库导出，`paths.py` 统一锚定持久化与捆绑路径。`curriculums.py` 加载四套教材 JSON，`prompts.py` 提供纯提示构建器，`ai_providers.py`、`ai_http.py`、`ai_json.py` 分别统一模型供应商解析、AI HTTP 请求与结构化输出解析。运维、迁移、检索与 Release 工具统一位于 `scripts/`，从项目根目录使用 `python3 -m scripts.<模块名>` 运行。严禁重新在根目录新增业务模块或复制供应商判断规则。
+- **后端渐进式模块架构**：根目录 `main.py` 继续作为 `uvicorn main:app` 兼容入口；后端领域能力统一集中在 `mathbank/`。`database.py` 提供 SQLite ORM 与 Session，`db_migrations.py` 提供版本化、备份优先的数据库迁移，`backup.py` 提供带清单校验的完整备份与恢复，`asset_security.py` 统一校验上传内容与本地资产路径，`task_manager.py` 提供有界异步任务、协作取消与临时资源生命周期，`health.py` 提供启动就绪诊断，`paper_helper.py` 提供 LaTeX/PDF 编译排版，`sync_helper.py` 只负责 JSON 同步导出与 AI 题库导出，`paths.py` 统一锚定持久化与捆绑路径。`curriculums.py` 加载人教版教材 JSON，`prompts.py` 提供纯提示构建器，`ai_providers.py`、`ai_http.py`、`ai_json.py` 分别统一模型供应商解析、AI HTTP 请求与结构化输出解析。运维、迁移、检索与 Release 工具统一位于 `scripts/`，从项目根目录使用 `python3 -m scripts.<模块名>` 运行。严禁重新在根目录新增业务模块或复制供应商判断规则。
 - **数据库**：SQLite + SQLAlchemy（轻量级，数据存储在本地 `.db` 文件中）。
 - **前端页面**：纯 HTML + 原生 JavaScript。
 - **前端脚本拆分**：前端 JS 采用无编译的“渐进式级联加载”架构，按 `api.js`、`editor.js`、`ocr.js`、`import.js`、`paper.js` 的顺序级联加载；前四个模块负责 API/全局状态、编辑与渲染、OCR 图像交互、导入拆卷，`paper.js` 负责组卷工作台。加载顺序严格依存，不允许产生任何编译及捆绑动作。
@@ -69,9 +69,9 @@
   - **三列比较表导出约束**：OCR 常见的简单 `|c|c|c|` 比较表在 PDF 导出时必须转换为 `\noindent tabularx`，第一列使用窄 `m{4em}`，两列正文使用等宽 `X` 自动换行；表内图片宽度受单元格 `\linewidth` 限制，并保留上下各 3pt 内边距，避免白底图片覆盖横线。不得用整表 `resizebox` 将长文本压成过小字号。
   - **LaTeX 段落与换行规范**：双回车（`\n\n+`）代表起新段落；网页预览使用 `mb-preview-paragraph-break` 的 `0.35em` 紧凑间隔，不再用连续两个 `<br>` 撑高。显式双反斜杠（`\\\\`）仍代表硬换行（`<br>`），单回车仅视为空格不打断自然段；解答题小问标号（如 `(1)`、`①`）保留段落分隔。此调整只改变预览间距，不改原文、数据库或 Word/LaTeX 导出的段落规则，公式、表格、代码及图片结构须继续保护。专项 `tests/test_preview_paragraph_spacing.py`。
   - **因为/所以符号导出**：Unicode `∵` / `∴` 仅在 LaTeX/PDF 导出副本中由 `mathbank.geometry_symbols` 转成 `\because` / `\therefore`，正文使用 `\ensuremath`，数学环境及文本宏保持各自模式，防止正文字体缺字。不回写原文，不改变 Word 分支；代码、TikZ、注释、图片路径、URL 和公式锁必须原样保留。专项 `tests/test_reasoning_symbol_export.py`，真实字形仍须通过 XeLaTeX 编译核对。
-- **教材大纲多版本预设与共存**：
-  - 快捷切换人教 A 版、人教 B 版、苏教版、沪教版标准大纲预设（`mathbank/resources/curriculums/`）。
-  - **活跃-镜像模式 (`question_curriculums`)**：存放题目在每套大纲中的分类镜像。主表字段反映当前活跃配置，切换大纲时后台自动运行增量迁移。
+- **教材大纲（单版本）**：
+  - 仅内置人教版小学 1~6 年级大纲（`mathbank/resources/curriculums/A.json`）。**教材版本切换功能已下线**：不再提供预设载入按钮与 `/api/config/curriculum-presets` 接口，`curriculum_version` 固定为 `A`，删除或修改该字段会导致版本识别失败。
+  - **活跃-镜像模式 (`question_curriculums`)**：存放题目分类镜像，`version_code` 恒为 `A`；主表字段反映当前配置。保留该结构以兼容既有数据与备份，不再用于多版本切换。
   - **旧单值小节是唯一分类入口（关系表保留作证据）**：`question_curriculums.knowledge` 是每教材版本的单值小节，`questions.category_knowledge` 是当前活跃版本镜像；章节始终只写在 `chapter`。编辑、题库筛选、草稿筛选、组卷与 AI 选题使用这一旧单值路径。空 `knowledge` 明确表示整章定位/待细分，保存或导入不得自动复制章节名到小节；历史章节级值、自定义值和独立 `tags` 均原样保留。`question_sub_knowledge` schema v11、外键、ORM/序列化、题库交换 JSON 与完整备份恢复完整保留为历史证据；普通编辑端省略 PUT 参数以免清空旧关系。禁止把关系表路径当作 `knowledge` 的筛选 OR 条件，或在 UI 重复呈现多选关系。
   - **本机旧 knowledge 回填审批边界**：此流程仅适用于 Git 忽略的本机内部工具，不是公开产品入口。先生成含原三字段、目标三字段、题干/关系 SHA-256、教材顺序及回滚值的只读提案；父任务审阅后另行生成绑定精确提案哈希和批准目标的审批清单，预检通过且显式确认才可写入。写入须持有运行锁、验证 v11/完整性/外键/题干/版本镜像/关系哈希、创建完整备份并在单事务完成；保留同章非空历史值与目录外自定义值，空小节目标也须核验真实册次/章节。仅更新获批版本的单值分类及活跃主表镜像，不改 tags 或关系证据。
   - **教材分类 AI 与导入协议**：通用分类、PDF 解析、TeX/Markdown 导入和 Word 来源元数据提示均提供当前教材版本下有序的册次／章节／小节树。融合题先按当前版本目录顺序（册次在前、册内章节在后）选择最靠后实际使用的章节，不按字符串、章节编号或异版章节比较；只有选定章节内唯一且有依据的小节才返回该小节，多小节无法确定唯一主项时返回空字符串。服务端拒绝不属于所选版本、册次、章节的非空小节；前端将空值显示为整章定位并回填旧 `editKnowledge` 控件，不虚构章节名小节。

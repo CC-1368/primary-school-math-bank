@@ -22,6 +22,13 @@ MAX_FIGURE_AREA_RATIO = 0.80
 MAX_CROP_SIDE = 2400
 MAX_CROP_PIXELS = 4_000_000
 CROP_DPI = 200
+# A model-drawn figure box can hug the text column while the illustration
+# overhangs it by a millimetre or two. The raster is the only reliable
+# evidence of that, so an edge that still carries ink is widened by these
+# bounded steps until the drawing is no longer sliced.
+EDGE_EXPANSION_STEP_PT = 2.0
+MAX_EDGE_EXPANSION_PT = 8.0
+EDGE_INK_THRESHOLD = 245
 MAX_LABEL_SEGMENTS = 6000
 MAX_LABEL_GEOMETRY_WORK = 20000
 MAX_LABEL_ANCHORS = 24
@@ -647,6 +654,285 @@ def refine_figure_bbox(page_info: dict, bbox, candidate_ids: list[str]) -> dict[
     return {"bbox": [round(value, 4) for value in current], "warnings": list(dict.fromkeys(warnings))}
 
 
+def _figure_label(text: str) -> bool:
+    """Short in-figure lettering: vertex letters, dimensions, ticks, 甲乙地."""
+    value = text.strip()
+    if not value or len(value) > 12:
+        return False
+    if re.search(r"[。！？；，、：:]|[（(][^)）]{0,8}[)）]", value):
+        return False
+    return len(re.findall(r"[\u4e00-\u9fff]", value)) <= 4
+
+
+def tighten_figure_bbox(page_info: dict, bbox, candidate_ids=None) -> dict[str, Any]:
+    """Pull a loose model box back onto the native geometry of the figure.
+
+    Vision models draw generous rectangles: they swallow the option row of the
+    same question, the stem of the next question, a neighbouring column
+    fragment or the dotted answer margin. The frame is therefore rebuilt from
+    native evidence (declared candidates first, then candidates mostly inside
+    the box), absorbing only the short lettering that belongs to the figure.
+    Geometry is never overruled: without trustworthy evidence, or when the
+    evidence disagrees with the box, the model rectangle is preserved.
+    """
+    original = _validated_bbox(bbox)
+    if not isinstance(page_info, dict):
+        return {"bbox": list(original), "warnings": []}
+    width, height = page_info.get("width"), page_info.get("height")
+    sized = all(
+        not isinstance(value, bool) and isinstance(value, (int, float)) and math.isfinite(value) and value > 0
+        for value in (width, height)
+    )
+    margin_x = 1500 / width if sized else 1.5
+    margin_y = 1500 / height if sized else 1.5
+
+    def evidence_box(value):
+        if not isinstance(value, (list, tuple)) or len(value) != 4:
+            return None
+        if any(isinstance(number, bool) or not isinstance(number, (int, float)) for number in value):
+            return None
+        result = tuple(float(number) for number in value)
+        if any(not math.isfinite(number) or not 0 <= number <= 1000 for number in result):
+            return None
+        return result if result[0] < result[2] and result[1] < result[3] else None
+
+    def area(rect):
+        return max(0.0, rect[2] - rect[0]) * max(0.0, rect[3] - rect[1])
+
+    def overlap(first, second):
+        return max(0.0, min(first[2], second[2]) - max(first[0], second[0])) * max(
+            0.0, min(first[3], second[3]) - max(first[1], second[1]))
+
+    def union(first, second):
+        return (min(first[0], second[0]), min(first[1], second[1]),
+                max(first[2], second[2]), max(first[3], second[3]))
+
+    candidates = []
+    for candidate in page_info.get("candidates") or []:
+        if not isinstance(candidate, dict):
+            continue
+        candidate_box = evidence_box(candidate.get("bbox"))
+        if candidate_box is not None:
+            candidates.append((str(candidate.get("id") or ""), candidate_box))
+    if not candidates:
+        return {"bbox": list(original), "warnings": []}
+
+    declared = {value for value in candidate_ids or [] if isinstance(value, str)} if isinstance(
+        candidate_ids, list) else set()
+    frame = None
+    for identifier, candidate_box in candidates:
+        if identifier and identifier in declared and overlap(original, candidate_box) >= 0.2 * area(candidate_box):
+            frame = candidate_box if frame is None else union(frame, candidate_box)
+    if frame is None:
+        # No declared evidence: only a region that mostly sits inside the box
+        # can be trusted as its content, otherwise a neighbour would shrink it.
+        for _, candidate_box in candidates:
+            if (overlap(original, candidate_box) >= 0.6 * area(candidate_box)
+                    and area(candidate_box) >= 0.02 * area(original)):
+                frame = candidate_box if frame is None else union(frame, candidate_box)
+    if frame is None:
+        return {"bbox": list(original), "warnings": []}
+
+    # A diagram split into several clusters must not lose the pieces that touch
+    # the frame it already owns; growth stays bounded below.
+    for _ in range(4):
+        grown = frame
+        for _, candidate_box in candidates:
+            if overlap(frame, candidate_box) >= 0.5 * area(candidate_box):
+                grown = union(grown, candidate_box)
+        if grown == frame:
+            break
+        frame = grown
+
+    def too_large(rect):
+        return (area(rect) > area(original) * 1.5 + 1e-6
+                or rect[2] - rect[0] > (original[2] - original[0]) * 1.4 + 1e-6
+                or rect[3] - rect[1] > (original[3] - original[1]) * 1.4 + 1e-6)
+
+    if too_large(frame):
+        return {"bbox": list(original),
+                "warnings": ["原生图形范围与模型图框差异过大，未自动收缩，请核对裁框。"]}
+
+    grown = frame
+    for block in page_info.get("text_blocks") or []:
+        if not isinstance(block, dict):
+            continue
+        block_box = evidence_box(block.get("bbox"))
+        if block_box is None or not _figure_label(str(block.get("text") or "")):
+            continue
+        center_x = (block_box[0] + block_box[2]) / 2
+        center_y = (block_box[1] + block_box[3]) / 2
+        if (frame[0] - 4 * margin_x <= center_x <= frame[2] + 4 * margin_x
+                and frame[1] - 4 * margin_y <= center_y <= frame[3] + 4 * margin_y):
+            grown = union(grown, block_box)
+
+    if too_large(grown):
+        grown = frame  # lettering beyond the frame must not blow the crop up
+
+    if grown == original:
+        return {"bbox": list(original), "warnings": []}
+    if area(grown) < 0.15 * area(original):
+        return {"bbox": list(original), "warnings": ["收缩后的图形区域过小，已保留原图框供核对。"]}
+    note = ("已把配图边界扩展到原生图形范围。" if area(grown) > area(original) + 1e-6
+            else "已收缩配图边界，只保留图形本体。")
+    return {"bbox": [round(value, 4) for value in grown], "warnings": [note]}
+
+
+PAGE_FURNITURE_TITLE = re.compile(
+    r"核心素养|单元\s*(?:测评|检测)|期中|期末|测评卷|检测卷|质量检测|满分|分值|答题时间|考试时间")
+PAGE_FURNITURE_SCORE = (re.compile(r"题\s*号"), re.compile(r"得\s*分|总\s*分"))
+# A numbered line that starts a question: "1." / "1、" / "（一）" / "一、".
+QUESTION_ANCHOR = re.compile(r"^(?:[（(]?[一二三四五六七八九十]{1,3}[)）]?[、.．]|\d{1,2}[.．、])\s*\S")
+
+
+def page_furniture_reason(page_info: dict, bbox) -> str:
+    """Explain why a region is page furniture rather than a question figure.
+
+    Vision models regularly mistake the running head, the unit banner or the
+    score grid for an illustration. Those regions all sit above the first
+    question of the page, so a box that ends above every question anchor is
+    furniture with no ambiguity. Text-based rules cover banners that carry
+    their own wording. Any doubt returns "" and leaves the region untouched.
+    """
+    box = _validated_bbox(bbox)
+    x0, y0, x1, y1 = box
+    width, height = page_info.get("width"), page_info.get("height")
+    if not all(
+        not isinstance(value, bool) and isinstance(value, (int, float)) and math.isfinite(value) and value > 0
+        for value in (width, height)
+    ):
+        return ""
+
+    def overlap(first, second):
+        return max(0, min(first[2], second[2]) - max(first[0], second[0])) * max(
+            0, min(first[3], second[3]) - max(first[1], second[1]))
+
+    inside, anchors = [], []
+    for block in page_info.get("text_blocks") or []:
+        if not isinstance(block, dict):
+            continue
+        raw = block.get("bbox")
+        text = str(block.get("text") or "").strip()
+        try:
+            block_box = _validated_bbox(raw)
+        except ValueError:
+            continue
+        if overlap(box, block_box) > 0.6 * max(1e-6, (block_box[2] - block_box[0]) * (block_box[3] - block_box[1])):
+            if text:
+                inside.append(text)
+        if text and QUESTION_ANCHOR.match(text) and overlap(box, block_box) <= 0:
+            anchors.append(block_box)
+
+    joined = "".join(inside)
+    if inside and PAGE_FURNITURE_SCORE[0].search(joined) and PAGE_FURNITURE_SCORE[1].search(joined):
+        return "得分统计表"
+    if inside and PAGE_FURNITURE_TITLE.search(joined) and x1 - x0 >= 250:
+        return "卷头标题横幅"
+    if anchors and y1 <= min(anchor[1] for anchor in anchors) + 4:
+        return "位于本页第一道题上方"
+    if y0 <= 2 and y1 <= 180 and x1 - x0 >= 300 and y1 - y0 <= 90 and (x1 - x0) / max(1e-6, y1 - y0) >= 2.5:
+        return "页眉通栏"
+    return ""
+
+
+def _render_crop_pixmap(page, clip, fitz):
+    """Render one crop rectangle at the bounded crop resolution."""
+    scale = min(
+        CROP_DPI / 72,
+        (MAX_CROP_SIDE - 2) / clip.width,
+        (MAX_CROP_SIDE - 2) / clip.height,
+        math.sqrt((MAX_CROP_PIXELS - 4 * MAX_CROP_SIDE) / clip.get_area()),
+    )
+    pixmap = page.get_pixmap(matrix=fitz.Matrix(scale, scale), clip=clip, colorspace=fitz.csRGB, alpha=False)
+    if min(pixmap.width, pixmap.height) < 2 or max(pixmap.width, pixmap.height) > MAX_CROP_SIDE or pixmap.width * pixmap.height > MAX_CROP_PIXELS:
+        raise ValueError("插图渲染尺寸无效或超过安全上限。")
+    return pixmap
+
+
+def _edge_ink_sides(pixmap) -> set:
+    """Report crop edges whose outermost pixel line still carries ink.
+
+    Geometry alone cannot tell a complete drawing from a sliced one; the
+    raster can. Only the border lines are inspected, so the cost is one line
+    per side regardless of crop size.
+    """
+    width, height, stride, components = pixmap.width, pixmap.height, pixmap.stride, pixmap.n
+    samples = pixmap.samples
+    if width < 2 or height < 2 or not samples:
+        return set()
+
+    def ink(offset):
+        return samples[offset] < EDGE_INK_THRESHOLD
+
+    sides = set()
+    if any(ink(row * stride) for row in range(height)):
+        sides.add("left")
+    if any(ink(row * stride + (width - 1) * components) for row in range(height)):
+        sides.add("right")
+    if any(ink(column * components) for column in range(width)):
+        sides.add("top")
+    if any(ink((height - 1) * stride + column * components) for column in range(width)):
+        sides.add("bottom")
+    return sides
+
+
+def _widen_clip_until_ink_clears(page, clip, page_rect, pixmap, fitz):
+    """Give a sliced illustration back its overhang, without recruiting prose.
+
+    Each edge that still touches ink is widened by one bounded step. A step is
+    refused when it would leave the page or when the added strip reaches a text
+    block, so a neighbouring column's text can never be pulled into a figure.
+    Rotated pages are left untouched: their text rectangles and the rendered
+    clip live in different coordinate spaces.
+    """
+    current = fitz.Rect(clip)
+    if getattr(page, "rotation", 0):
+        return current
+    try:
+        text_rects = [
+            fitz.Rect(block[:4]) for block in page.get_text("blocks")
+            if len(block) >= 4 and str(block[4]).strip()
+        ]
+    except Exception:
+        return current
+
+    expanded = 0.0
+    while expanded < MAX_EDGE_EXPANSION_PT:
+        sides = _edge_ink_sides(pixmap)
+        if not sides:
+            break
+        step = min(EDGE_EXPANSION_STEP_PT, MAX_EDGE_EXPANSION_PT - expanded)
+        changed = False
+        for side in ("left", "top", "right", "bottom"):
+            if side not in sides:
+                continue
+            candidate = fitz.Rect(current)
+            if side == "left":
+                candidate.x0 -= step
+                band = fitz.Rect(candidate.x0, current.y0, current.x0, current.y1)
+            elif side == "right":
+                candidate.x1 += step
+                band = fitz.Rect(current.x1, current.y0, candidate.x1, current.y1)
+            elif side == "top":
+                candidate.y0 -= step
+                band = fitz.Rect(current.x0, candidate.y0, current.x1, current.y0)
+            else:
+                candidate.y1 += step
+                band = fitz.Rect(current.x0, current.y1, current.x1, candidate.y1)
+            if (candidate.x0 < page_rect.x0 or candidate.y0 < page_rect.y0
+                    or candidate.x1 > page_rect.x1 or candidate.y1 > page_rect.y1):
+                continue
+            if any(band.intersects(rect) for rect in text_rects):
+                continue
+            current = candidate
+            changed = True
+        if not changed:
+            break
+        expanded += step
+        pixmap = _render_crop_pixmap(page, current, fitz)
+    return current
+
+
 def crop_pdf_figure(
     page,
     bbox,
@@ -678,15 +964,11 @@ def crop_pdf_figure(
     )
     # get_pixmap's display-list clip follows the rotated visible page, unlike
     # extraction boxes. Do not derotate this rectangle a second time.
-    scale = min(
-        CROP_DPI / 72,
-        (MAX_CROP_SIDE - 2) / clip.width,
-        (MAX_CROP_SIDE - 2) / clip.height,
-        math.sqrt((MAX_CROP_PIXELS - 4 * MAX_CROP_SIDE) / clip.get_area()),
-    )
-    pixmap = page.get_pixmap(matrix=fitz.Matrix(scale, scale), clip=clip, colorspace=fitz.csRGB, alpha=False)
-    if min(pixmap.width, pixmap.height) < 2 or max(pixmap.width, pixmap.height) > MAX_CROP_SIDE or pixmap.width * pixmap.height > MAX_CROP_PIXELS:
-        raise ValueError("插图渲染尺寸无效或超过安全上限。")
+    pixmap = _render_crop_pixmap(page, clip, fitz)
+    widened = _widen_clip_until_ink_clears(page, clip, page_rect, pixmap, fitz)
+    if widened != clip:
+        clip = widened
+        pixmap = _render_crop_pixmap(page, clip, fitz)
     png = pixmap.tobytes("png")
     output_dir.mkdir(parents=True, exist_ok=True)
     filename = f"{asset_prefix}_{uuid.uuid4().hex}.png"

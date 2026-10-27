@@ -18,6 +18,9 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PORT = 8000
 BASE_URL = f"http://127.0.0.1:{PORT}"
+# Bind address. Default is loopback-only; set MATHBANK_HOST=0.0.0.0 to share
+# the library with colleagues on the same local network.
+HOST = (os.environ.get("MATHBANK_HOST") or "127.0.0.1").strip() or "127.0.0.1"
 REPOSITORY = "JudgePeach/math-question-bank"
 IMPORT_CHECK = (
     "import fastapi,uvicorn,sqlalchemy,greenlet,colorama,multipart,dotenv,"
@@ -47,6 +50,28 @@ def existing_service_ready() -> bool:
         )
     except (OSError, ValueError):
         return False
+
+
+def local_network_ip() -> str:
+    """Best-effort LAN IPv4 of this machine. No packet is actually sent."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sock.connect(("8.8.8.8", 80))
+        ip = sock.getsockname()[0]
+    except OSError:
+        ip = ""
+    finally:
+        sock.close()
+    if not ip or ip.startswith("127."):
+        try:
+            for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+                candidate = info[4][0]
+                if not candidate.startswith("127."):
+                    ip = candidate
+                    break
+        except OSError:
+            ip = ""
+    return ip
 
 
 def port_in_use() -> bool:
@@ -204,7 +229,7 @@ def start_server(root: Path, python: Path) -> None:
     environment = os.environ.copy()
     environment["MATHBANK_LAUNCH_ID"] = launch_id
     command = [str(python), "-u", "-m", "uvicorn", "main:app",
-               "--host", "127.0.0.1", "--port", str(PORT)]
+               "--host", HOST, "--port", str(PORT)]
     options = {}
     if os.name == "nt":
         options["creationflags"] = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
@@ -234,11 +259,34 @@ def start_server(root: Path, python: Path) -> None:
     with contextlib.suppress(OSError):
         (state_dir / "probe.log").unlink(missing_ok=True)
     print("题库已就绪。")
+    if HOST not in ("127.0.0.1", "localhost"):
+        lan_ip = local_network_ip()
+        if lan_ip:
+            print(f"局域网共享已开启，同事可在同一网络下访问：http://{lan_ip}:{PORT}")
+        else:
+            print(f"局域网共享已开启，但未检测到局域网 IP；请确认本机已连接 Wi-Fi 或网线。")
     open_browser()
+
+
+def running_on_lan() -> bool:
+    """Whether the running service also accepts connections from the LAN."""
+    ip = local_network_ip()
+    if not ip:
+        return False
+    try:
+        with socket.create_connection((ip, PORT), timeout=0.5):
+            return True
+    except OSError:
+        return False
 
 
 def run_launcher(root: Path = PROJECT_ROOT) -> None:
     if existing_service_ready():
+        if HOST not in ("127.0.0.1", "localhost") and not running_on_lan():
+            raise LauncherError(
+                "题库目前只在本机运行，同事无法访问。\n"
+                "请先在网页里关闭服务，再重新运行这个局域网共享快捷方式。"
+            )
         print("题库已经在运行，正在打开网页。如刚更新了程序，请先在网页关闭服务再启动。")
         open_browser()
         return
