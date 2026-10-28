@@ -2,6 +2,8 @@
 
 [中文](README.md) | [English](README_EN.md)
 
+> 🎯 **本仓库定位**：面向小学数学教师的题库管理工作台——从 PDF 试卷导入、智能拆题、AI 解析，到 A4 仿真排版与试卷导出的一站式流程。
+
 > [!IMPORTANT]
 > **本仓库是 [JudgePeach/math-question-bank](https://github.com/JudgePeach/math-question-bank)（AGPL-3.0）的本地化改造版**，并非官方发行版。
 > 在上游基础上新增：文档项目流水线（断点续跑）、PDF 解析与图块治理（矢量优先 + VLM 降级）、填空题结构化修复、知识点 AI 分类建议、导出预检（缺图 fail-closed）、后台批量导出与题库迁移等能力。
