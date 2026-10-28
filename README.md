@@ -19,9 +19,9 @@
 
 https://github.com/user-attachments/assets/46834cbd-3499-4c06-9d8e-c81bdc10a0a7
 
-![MathBank 首页工作台（深海蓝主题）](docs/images/screenshot1.png)
+![MathBank 首页工作台](docs/images/screenshot1.png)
 
-![MathBank 题库管理与题目解析（深海蓝主题）](docs/images/screenshot2.png)
+![MathBank 题库管理与题目解析](docs/images/screenshot2.png)
 
 ---
 
