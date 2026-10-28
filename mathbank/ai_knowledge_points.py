@@ -16,14 +16,30 @@ EVIDENCE_FIELDS = ("content", "answer_markdown", "review_markdown")
 
 
 def load_ai_knowledge_catalog(db=None):
-    """Read the actual installed catalogue, including teacher-created points."""
+    """Read the installed catalogue, including teacher-created points.
+
+    Only points that still map into an installed textbook (at least one
+    curriculum path) are offered to AI prompts and validators. Points whose
+    textbook paths were all removed are legacy orphans — a retired catalogue
+    must never let the model tag a primary-school question with a high-school
+    identity. Teachers can still attach such points by hand in management UIs.
+    """
     from .database import KnowledgePoint, SessionLocal
     owned = db is None or not hasattr(db, "query")
     session = SessionLocal() if owned else db
     try:
         rows = session.query(KnowledgePoint).order_by(KnowledgePoint.code).all()
-        return [{"code": row.code, "name": row.name, "original_name": row.original_name,
-                 "aliases": list(row.aliases)} for row in rows]
+        catalog = []
+        for row in rows:
+            try:
+                paths = list(row.curriculum_paths)
+            except SQLAlchemyError:
+                paths = []
+            if not paths:
+                continue
+            catalog.append({"code": row.code, "name": row.name, "original_name": row.original_name,
+                            "aliases": list(row.aliases)})
+        return catalog
     except SQLAlchemyError:
         # Classification remains usable before an isolated database is seeded;
         # never invent a replacement catalogue or mutate it on this read path.
@@ -36,6 +52,9 @@ def load_ai_knowledge_catalog(db=None):
 def build_ai_knowledge_prompt(catalog=None):
     # Prompt builders are pure; request orchestrators supply their DB snapshot.
     catalog = [] if catalog is None else catalog
+    if not catalog:
+        return ("【独立考查知识点】当前知识点目录为空（或没有任何与已安装教材目录关联的知识点），"
+                "knowledge_points 恒返回 []；不要编造编码、名称或输出目录之外的内容。\n")
     compact = []
     for point in catalog:
         names = list(dict.fromkeys(value for value in

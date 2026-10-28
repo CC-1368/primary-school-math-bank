@@ -27,7 +27,7 @@ if hasattr(sys.stdout, "reconfigure"):
 import secrets
 from typing import List, Optional
 from PIL import Image
-from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form, BackgroundTasks, Request, Response, Header, Query
+from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form, BackgroundTasks, Request, Response, Header, Query, Body
 from fastapi.responses import FileResponse, JSONResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -189,6 +189,7 @@ from mathbank.prompts import (
     build_single_ocr_vision_prompt,
     build_ai_solve_prompts,
     build_classification_system_prompt,
+    grade_pool_and_rule,
     build_import_parse_system_prompt,
     build_latex_error_explanation_prompts,
     build_paper_selection_prompts,
@@ -264,7 +265,8 @@ from mathbank.asset_lifecycle import (
     register_asset_store,
     serialize_asset_lifecycle,
 )
-from mathbank.paths import RETAINED_UPLOADS_DIR
+from mathbank.paths import RETAINED_UPLOADS_DIR, PDF_RETENTION_DIR
+from mathbank.pdf_retention import PdfRetentionStore, retention_settings_from_env
 from mathbank.question_assets import (
     embedded_question_assets,
     markdown_literal_ranges,
@@ -749,6 +751,36 @@ DOCUMENT_TASKS = DurableDocumentTasks(
     record_cleanup=lambda task_id: DOCUMENT_TASK_INPUTS.pop(task_id, None),
 )
 DOCUMENT_TASK_INPUTS = {}
+
+# Budget-bounded retention of PDF originals so figure crops can be re-cut
+# for already imported questions. Deduplicated by SHA-256; LRU + age
+# eviction keeps the footprint inside MATHBANK_PDF_RETENTION_MB (0=off).
+if IS_TESTING:
+    PDF_RETENTION = None
+else:
+    try:
+        PDF_RETENTION = PdfRetentionStore(PDF_RETENTION_DIR, **retention_settings_from_env())
+        PDF_RETENTION.enforce()
+        _retention_usage = PDF_RETENTION.usage()
+        _retention_budget_mb = (_retention_usage["budget_bytes"] or 0) // (1024 * 1024)
+        print(f"[PDF Retention] 原件留存已启用：预算 {_retention_budget_mb}MB，"
+              f"当前 {_retention_usage['file_count']} 份 / "
+              f"{_retention_usage['total_bytes'] // 1024 // 1024}MB。", flush=True)
+    except OSError as _retention_error:
+        print(f"[PDF Retention] 留存目录不可用，本次启动不保留 PDF 原件 ({_retention_error}).", flush=True)
+        PDF_RETENTION = None
+
+
+def _retain_pdf_original(content: bytes, filename: str) -> dict | None:
+    """Best-effort PDF original retention; never fails the import."""
+    if PDF_RETENTION is None or not content:
+        return None
+    entry = PDF_RETENTION.save(content, filename)
+    if entry is None:
+        return None
+    if PDF_RETENTION.usage()["total_bytes"] > (PDF_RETENTION.max_total_bytes or 0):
+        return {**entry, "warning": "留存空间已满，最早的 PDF 原件将被自动清理。"}
+    return entry
 _DOCUMENT_PROJECT_STOP = threading.Event()
 
 
@@ -772,8 +804,10 @@ def _register_document_input(task_id, content, document_type, filename, **option
               {"sha256": hashlib.sha256(content).hexdigest(), "bytes": len(content)})
     if not persistent:
         DOCUMENT_TASK_INPUTS[task_id] = content
+    retained = _retain_pdf_original(content, filename) if document_type == "pdf" else None
     return {**source, "document_type": document_type, "filename": filename, "options": options,
-            "curriculum_sha256": _document_curriculum_sha256()}
+            "curriculum_sha256": _document_curriculum_sha256(),
+            **({"retained_pdf": retained} if retained else {})}
 
 
 def _document_status(task_id, task):
@@ -4548,7 +4582,8 @@ def list_categories(db: Session = Depends(get_db)):
 @app.post("/api/ai/classify")
 def ai_classify(content: str = Form(...), answer_markdown: str = Form(""),
                 review_markdown: str = Form(""), db: Session = Depends(get_db),
-                expected_version_code: Optional[str] = Form(None)):
+                expected_version_code: Optional[str] = Form(None),
+                expected_compulsory: str = Form("")):
     classify_model = (
         os.getenv("PREFER_CLASSIFY_MODEL") 
         or os.getenv("DEEPSEEK_CLASSIFY_MODEL") 
@@ -4577,7 +4612,11 @@ def ai_classify(content: str = Form(...), answer_markdown: str = Form(""),
             return JSONResponse(content={"status": "error", "message": "当前教材版本已变化，请刷新后重新分类。"}, status_code=409)
         curriculum = copy.deepcopy(get_current_curriculum())
         knowledge_catalog = load_ai_knowledge_catalog(db)
-        system_instructions = build_classification_system_prompt(curriculum, knowledge_catalog)
+        expected_book = (expected_compulsory or "").strip()
+        if expected_book and expected_book not in curriculum:
+            return JSONResponse(content={"status": "error", "message": "所选学段不在当前教材大纲中，请刷新页面后重新分类。"}, status_code=400)
+        system_instructions = build_classification_system_prompt(curriculum, knowledge_catalog,
+                                                                 expected_compulsory=expected_book or None)
         question_input = {"content": content,
                           "answer_markdown": answer_markdown if isinstance(answer_markdown, str) else "",
                           "review_markdown": review_markdown if isinstance(review_markdown, str) else ""}
@@ -4638,6 +4677,10 @@ def ai_classify(content: str = Form(...), answer_markdown: str = Form(""),
         if get_active_version_code() != version_code:
             return JSONResponse(content={"status": "error", "message": "分类期间教材版本已变化，请保留当前编辑并重新分类。"}, status_code=409)
         curr = curriculum
+        if expected_book and compulsory != expected_book:
+            raise ValueError(
+                f"AI 返回的学段「{compulsory}」与已选学段「{expected_book}」不一致，已拒绝本次结果；"
+                "如需跨册重新定位，请先清空题目表单中的学段再分类。")
         if (compulsory in curr and chapter in curr[compulsory]
                 and isinstance(knowledge, str)
                 and (not knowledge or knowledge in curr[compulsory][chapter])):
@@ -4791,8 +4834,9 @@ def parse_paper_text_internal(
         raise ValueError(f"未配置对应的 API Key ({provider.credential_label})，无法智能拆解试卷！请在工作台右上角设置面板进行配置。")
 
     curriculum = copy.deepcopy(get_current_curriculum())
+    grade_pool, grade_rule = grade_pool_and_rule(curriculum, latex_content)
     system_instructions = build_pdf_parse_system_prompt(
-        curriculum, generate_answers_bool, load_ai_knowledge_catalog()
+        grade_pool, generate_answers_bool, load_ai_knowledge_catalog(), grade_rule=grade_rule,
     )
 
     max_output_tokens = 65536
@@ -4925,7 +4969,10 @@ def ai_parse_paper(
 
         curriculum = copy.deepcopy(get_current_curriculum())
         knowledge_catalog = load_ai_knowledge_catalog()
-        system_instructions = build_import_parse_system_prompt(curriculum, source_format, knowledge_catalog)
+        grade_pool, grade_rule = grade_pool_and_rule(curriculum, paper_title, model_source)
+        system_instructions = build_import_parse_system_prompt(
+            grade_pool, source_format, knowledge_catalog, grade_rule=grade_rule,
+        )
 
         max_output_tokens = 65536
 
@@ -7198,6 +7245,35 @@ def upload_pdf_task(
             content={"status": "error", "message": f"创建 PDF 解析任务失败: {str(e)}"},
             status_code=500
         )
+
+
+@app.get("/api/documents/pdf-retention")
+def get_pdf_retention():
+    if PDF_RETENTION is None:
+        return JSONResponse(content={"enabled": False}, status_code=200)
+    usage = PDF_RETENTION.usage()
+    entries = sorted(PDF_RETENTION.entries(),
+                     key=lambda entry: str(entry.get("last_accessed_at") or ""), reverse=True)
+    return {"enabled": True, **usage, "entries": entries}
+
+
+@app.delete("/api/documents/pdf-retention/{sha256}")
+def delete_pdf_retention(sha256: str):
+    if PDF_RETENTION is None:
+        raise HTTPException(status_code=404, detail="PDF 留存未启用。")
+    if not PDF_RETENTION.delete(sha256):
+        raise HTTPException(status_code=404, detail="未找到对应的 PDF 原件。")
+    return {"status": "success", **PDF_RETENTION.usage()}
+
+
+@app.post("/api/documents/pdf-retention/{sha256}/pin")
+def pin_pdf_retention(sha256: str, payload: dict = Body(default={})):
+    if PDF_RETENTION is None:
+        raise HTTPException(status_code=404, detail="PDF 留存未启用。")
+    pinned = bool((payload or {}).get("pinned", True))
+    if not PDF_RETENTION.set_pinned(sha256, pinned):
+        raise HTTPException(status_code=404, detail="未找到对应的 PDF 原件。")
+    return {"status": "success", "sha256": sha256, "pinned": pinned}
 
 
 @serialize_asset_lifecycle

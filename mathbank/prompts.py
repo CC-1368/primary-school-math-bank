@@ -1,10 +1,80 @@
 """Central prompt constants and pure prompt builders for MathBank AI flows."""
 
 import json
+import re
 
 from mathbank.source_review_focus import build_review_focus
 from mathbank.pdf_symbol_risks import visible_symbol_risk_hints
 from mathbank.question_types import TRUE_FALSE_TYPE_RULE
+
+
+_GRADE_HINT_RE = re.compile(r"([一二三四五六1-6])\s*年级\s*([上下])?\s*册?")
+_GRADE_HINT_DIGITS = {"1": "一", "2": "二", "3": "三", "4": "四", "5": "五", "6": "六"}
+
+
+def detect_grade_books(curriculum: dict, *texts) -> frozenset:
+    """Books (册) named by grade hints in the exam material.
+
+    A hint without 上/下册 contributes every installed book of that grade;
+    hints for different grades never merge. Only labels that really exist in
+    the active curriculum count.
+    """
+    if not isinstance(curriculum, dict) or not curriculum:
+        return frozenset()
+    books = set()
+    for text in texts:
+        if not isinstance(text, str):
+            continue
+        for match in _GRADE_HINT_RE.finditer(text[:4000]):
+            grade = _GRADE_HINT_DIGITS.get(match.group(1), match.group(1)) + "年级"
+            candidates = [book for book in curriculum
+                          if isinstance(book, str) and book.startswith(grade)]
+            if not candidates:
+                continue
+            volume = match.group(2)
+            exact = grade + volume + "册" if volume and grade + volume + "册" in candidates else None
+            if exact:
+                books.add(exact)
+            else:
+                books.update(candidates)
+    return frozenset(book for book in books if book in curriculum)
+
+
+def grade_pool_and_rule(curriculum: dict, *texts) -> tuple[dict, str]:
+    """Narrow the curriculum pool to the material's own grade, with its rule.
+
+    One named book locks the compulsory field outright; one grade spanning
+    its two volumes still narrows the pool to those books. Conflicting or
+    unknown grades return the untouched pool — never a guess.
+    """
+    books = detect_grade_books(curriculum, *texts)
+    if not books:
+        return curriculum, ""
+    grades = {book[:-2] for book in books}
+    if len(grades) != 1:
+        return curriculum, ""
+    pool = filter_curriculum_to_books(curriculum, books)
+    if len(pool) == 1:
+        return pool, build_grade_lock_rule(next(iter(pool)))
+    return pool, build_grade_scope_rule(sorted(pool))
+
+
+def filter_curriculum_to_books(curriculum: dict, books) -> dict:
+    """Keep the given book labels, preserving the catalogue's own order."""
+    wanted = {book for book in books if isinstance(book, str)}
+    return {book: chapters for book, chapters in curriculum.items() if book in wanted}
+
+
+def build_grade_lock_rule(book: str) -> str:
+    return (f"册次锁定：本题/本卷的教材册次已确定为「{book}」，`compulsory`/`category_compulsory` "
+            f"必须原样返回「{book}」，章节、小节只能从该册下列出项中选择；不得改选其他册次，"
+            "也不得因题目涉及其他年级的说法而变更册次。")
+
+
+def build_grade_scope_rule(books) -> str:
+    named = "、".join(f"「{book}」" for book in books)
+    return (f"年级锁定：本卷的年级线索指向{named}；`compulsory`/`category_compulsory` 只能返回"
+            f"{named}之一，章节、小节只能从对应册下列出项中选择。")
 
 
 def build_pdf_source_verification_prompt(items: list[dict]) -> str:
@@ -247,10 +317,10 @@ def build_pdf_layout_prompt(markdown: str, page_info: dict) -> str:
         "禁止返回XY或YX顺序数组；X从左到右、Y从上到下，不能交换。"
         "例：{\"left\":120,\"top\":640,\"right\":480,\"bottom\":820}表示水平120至480、垂直640至820，宽360高180；"
         "它不是水平640至820、垂直120至480。示例仅解释方向，不可照抄，须根据当前图像定位。"
-        "bbox 是图形或表格本体的外接矩形：上边界贴住图形上沿，下边界到图形底边即止，左右贴住最外侧笔画，"
-        "包含图内的字母、刻度、阴影和图注，禁止裁掉边缘标注。"
+        "bbox 是整幅插图的外接矩形：必须覆盖图形的全部笔画、图内字母、刻度、阴影、图注，"
+        "以及紧贴图形的地名或标签（如甲地、乙地、客车、货车）；宁可四周略留白，也不可切掉任何笔画或标注。"
         "选项行（A. … B. …）、下一题的题号与题干、分节标题（如“三 计算题。（共16分）”）、"
-        "页边竖线或答题栏、相邻栏的文字都不属于配图；框内一旦出现这些内容，说明框画大了，必须收紧到图形本体。"
+        "页边竖线、装订虚线或答题栏、相邻栏的文字都不属于配图；框内一旦出现这些内容，说明框画大了，必须收紧到图形本体。"
         "candidate_ids 只引用确实由该图覆盖的候选，可以为空；没有组成图片的候选必须在ignored_candidates逐一说明。"
         "扫描页背景及native_box_eligible=false长条分块不得冒充独立原生配图，必须提供包含字母的真实图形bbox。"
         "最多 32 幅图。\n"
@@ -410,9 +480,15 @@ def build_curriculum_text(curriculum: dict) -> str:
     return "\n".join(lines) + ("\n" if lines else "")
 
 
-def build_classification_system_prompt(curriculum: dict, knowledge_catalog=None) -> str:
+def build_classification_system_prompt(curriculum: dict, knowledge_catalog=None,
+                                       expected_compulsory=None) -> str:
     from .ai_knowledge_points import build_ai_knowledge_prompt
-    curriculum_text = build_curriculum_text(curriculum)
+    pool = curriculum
+    lock_rule = ""
+    if isinstance(expected_compulsory, str) and expected_compulsory in curriculum:
+        pool = filter_curriculum_to_books(curriculum, [expected_compulsory])
+        lock_rule = f"2.0 {build_grade_lock_rule(expected_compulsory)}\n"
+    curriculum_text = build_curriculum_text(pool)
     return (
         "你是一个专门为教材分类的 AI 专家。请分析以下输入的题目，将其归入特定的教材体系中。\n"
         "【可选教材范围、章节及各章真实小节】:\n"
@@ -420,6 +496,7 @@ def build_classification_system_prompt(curriculum: dict, knowledge_catalog=None)
         "【分类规则】:\n"
         "1. 仔细阅读并推导题目考点。\n"
         "2. 必须为本题挑选一个可选【学段】和【所属章节】。只有能确定具体考点时，才将 `knowledge` 填为该章节下列表中的一个真实小节，必须逐字匹配；无法确定时 `knowledge` 返回空字符串，表示整章定位/待细分。严禁把章节名伪装成小节，也不要猜测。\n"
+        f"{lock_rule}"
         f"3. {CLASSIFICATION_PRIORITY_RULE}\n"
         "4. 只判定粗粒度题型 `question_form`：填空题为 `fill_in_blank`，判断题（正误题/对错题）为 `true_false`，解答题为 `detailed_answer`，任何选择题一律为 `choice`，无法可靠判断时为 `unknown`。严禁输出或猜测 `single_choice`、`multi_choice`、单选题、多选题。题干出现 `\\fillin` 时应判为填空题，出现 `\\begin{choices}` 时应判为选择题。\n"
         "4.1 判断题判定口径：题干本身是一个完整的陈述句或判断句（常以“判断”“下面说法”“是否正确”“对的画√，错的画×”等提示），作答只需回答“正确/错误（√/×）”，没有 A/B/C/D 选项、也没有需要填多个空的空格时，必须判为 `true_false`。不要因为题干里出现“判断下列说法的正误”就把它当成解答题，也不要因为句子里有数字运算就当成填空题；只有确实留下 `\\fillin` 或多处下划线待填的才是填空题。\n"
@@ -560,8 +637,10 @@ def build_paper_selection_prompts(
     return system_prompt, user_content
 
 
-def build_pdf_parse_system_prompt(curriculum: dict, generate_answers_bool: bool, knowledge_catalog=None) -> str:
+def build_pdf_parse_system_prompt(curriculum: dict, generate_answers_bool: bool, knowledge_catalog=None,
+                                  grade_rule: str = "") -> str:
     from .ai_knowledge_points import build_ai_knowledge_prompt
+    rule_line = grade_rule + "\n" if grade_rule else ""
     curriculum_text = build_curriculum_text(curriculum)
     
     if generate_answers_bool:
@@ -583,6 +662,7 @@ def build_pdf_parse_system_prompt(curriculum: dict, generate_answers_bool: bool,
         f"{curriculum_text}\n"
         "【核心拆题与分类规范】:\n"
         "1. 字段分类：挑选精确匹配的学段 `category_compulsory`、章节 `category_chapter`，以及该章节下真实小节 `category_knowledge`（必须与大纲列表逐字一致）；若无法确定小节，返回空字符串表示整章待细分，绝不猜测或将章节名充作小节。题型 `question_type`（single_choice / multi_choice / fill_in_blank / true_false / detailed_answer）；难度 `difficulty`（easy_error / challenge / qiangji）；剥离题号与出处信息（如 2024·全国·高考真题）填入 `source`。\n"
+        f"{rule_line}"
         f"1.1 {CLASSIFICATION_PRIORITY_RULE}\n"
         f"1.2 {TRUE_FALSE_TYPE_RULE}"
         "反之也不要因为题干里有算式就判成判断题；判断题的 `answer_markdown` 判断结论之后可附一句简析。\n"
@@ -621,10 +701,12 @@ def build_pdf_parse_system_prompt(curriculum: dict, generate_answers_bool: bool,
     return system_instructions
 
 
-def build_import_parse_system_prompt(curriculum: dict, source_format: str = "tex", knowledge_catalog=None) -> str:
+def build_import_parse_system_prompt(curriculum: dict, source_format: str = "tex", knowledge_catalog=None,
+                                     grade_rule: str = "") -> str:
     """Prompt for pasted/uploaded single-file TeX or Markdown exam parsing."""
     base = build_pdf_parse_system_prompt(curriculum, generate_answers_bool=False,
-                                        knowledge_catalog=knowledge_catalog) + FILLIN_STYLE_RULE
+                                        knowledge_catalog=knowledge_catalog,
+                                        grade_rule=grade_rule) + FILLIN_STYLE_RULE
     if source_format == "markdown":
         return base + (
             "\n【单文件 Markdown 源码专项规则】:\n"

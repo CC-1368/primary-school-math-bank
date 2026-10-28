@@ -5968,6 +5968,9 @@ button[aria-disabled="true"]:hover,
 .mb-kp-create :is(input[type="text"],input:not([type]),textarea) { width: 100%; min-height: 44px; padding: 8px 10px; }
 .mb-kp-badges { margin-top: 5px; }
 .mb-kp-badge { display: inline-block; font-size: 12px; padding: 3px 6px; border-radius: 7px; overflow-wrap: anywhere; }
+/* 知识点标签全局隐藏（用户确认暂不使用，仅隐藏展示、不删除数据；恢复显示时移除以下两条规则即可） */
+.mb-kp-badges { display: none !important; }
+.card-knowledge-points { display: none !important; }
 .mb-question-reference { display: inline; margin: 0 .25em; padding: .05em .25em; border: 0; border-radius: 4px; font: inherit; font-size: .84em; line-height: inherit; white-space: nowrap; vertical-align: baseline; color: rgb(var(--brand-600-rgb)); background: rgba(var(--brand-500-rgb), .09); cursor: pointer; }
 .mb-question-reference:hover { text-decoration: underline; background: rgba(var(--brand-500-rgb), .16); }
 .mb-question-reference:focus-visible { outline: 2px solid rgb(var(--brand-500-rgb)); outline-offset: 2px; }

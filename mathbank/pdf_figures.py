@@ -576,6 +576,30 @@ def enrich_pdf_with_figures(
                                     affected["review_required"] = True
                                     affected["review_reasons"].append(message)
                                 page_warnings.append(message)
+                    page_image = page_images[local_index] if local_index < len(page_images) else ""
+                    if page_image and not figure.get("native_box"):
+                        # The vision box is a guess even on a born-digital page:
+                        # settle its edges against the page raster the model saw.
+                        from mathbank.pdf_raster_guard import refine_figure_frame
+                        framed = refine_figure_frame(page_image, figure["bbox"])
+                        check_cancelled()
+                        if framed.get("changed"):
+                            figure["bbox"] = framed["bbox"]
+                            figure["raster_frame"] = {"model_bbox": figure["model_bbox"],
+                                                      "method": framed.get("method")}
+                            for message in framed.get("notes") or ():
+                                page_notes.append(message)
+                        for message in framed.get("warnings") or ():
+                            figure["review_required"] = True
+                            figure["review_reasons"].append(message)
+                            page_warnings.append(message)
+                        for previous in page_state["figures"]:
+                            message = _figure_overlap_warning(previous["bbox"], figure["bbox"], after_guard=True)
+                            if message:
+                                for affected in (previous, figure):
+                                    affected["review_required"] = True
+                                    affected["review_reasons"].append(message)
+                                page_warnings.append(message)
                     if figure.get("slot_id"):
                         slot = next(slot for slot in info["figure_slots"] if slot["id"] == figure["slot_id"])
                         # The model selects a server-issued ID. The server owns

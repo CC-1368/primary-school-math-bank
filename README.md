@@ -1,6 +1,11 @@
-# MathBank - 本地化数学题库与组卷排版工作台
+# MathBank - 本地化数学题库与组卷排版工作台（本地化改造版）
 
 [中文](README.md) | [English](README_EN.md)
+
+> [!IMPORTANT]
+> **本仓库是 [JudgePeach/math-question-bank](https://github.com/JudgePeach/math-question-bank)（AGPL-3.0）的本地化改造版**，并非官方发行版。
+> 在上游基础上新增：文档项目流水线（断点续跑）、PDF 解析与图块治理（矢量优先 + VLM 降级）、填空题结构化修复、知识点 AI 分类建议、导出预检（缺图 fail-closed）、后台批量导出与题库迁移等能力。
+> 完整改动清单见 [LOCAL-CHANGES.md](LOCAL-CHANGES.md)。本仓库同样以 **AGPL-3.0** 协议开源，感谢原作者 JudgePeach。
 
 📖 **使用帮助**：[MathBank 帮助网页](https://mathbank.pages.dev/)
 

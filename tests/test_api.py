@@ -263,14 +263,16 @@ def test_ai_classify_returns_coarse_form_without_question_type():
             "下列结论正确的是\\begin{choices}\\item A\\item B\\end{choices}"
         )
 
-    assert ai_result == {
+    # 分类结果允许追加字段（知识点/版本等），这里只固定分类本身的契约。
+    for key, value in {
         "status": "success",
         "compulsory": "必修一",
         "chapter": "1. 集合",
         "knowledge": "",
         "question_form": "choice",
         "question_form_source": "ai",
-    }
+    }.items():
+        assert ai_result[key] == value
     assert fillin_result["question_form"] == "fill_in_blank"
     assert fillin_result["question_form_source"] == "structure"
     assert choices_result["question_form"] == "choice"

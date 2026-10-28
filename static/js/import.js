@@ -1596,6 +1596,8 @@
             formData.append('answer_markdown', document.getElementById('editAnswerMarkdown').value);
             formData.append('review_markdown', document.getElementById('editReview').value);
             if (context.version) formData.append('expected_version_code', context.version);
+            const expectedBook = String(document.getElementById('editCompulsory')?.value || '').trim();
+            if (expectedBook) formData.append('expected_compulsory', expectedBook);
             
             return fetch('/api/ai/classify', {
                 method: 'POST',

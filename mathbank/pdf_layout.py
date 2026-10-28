@@ -708,9 +708,12 @@ def tighten_figure_bbox(page_info: dict, bbox, candidate_ids=None) -> dict[str, 
                 max(first[2], second[2]), max(first[3], second[3]))
 
     candidates = []
+    background = scan_background_candidate_ids(page_info)
     for candidate in page_info.get("candidates") or []:
         if not isinstance(candidate, dict):
             continue
+        if str(candidate.get("id") or "") in background:
+            continue  # 扫描拼接条不是独立图形，不能拿来当外框证据
         candidate_box = evidence_box(candidate.get("bbox"))
         if candidate_box is not None:
             candidates.append((str(candidate.get("id") or ""), candidate_box))

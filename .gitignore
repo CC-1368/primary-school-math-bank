@@ -125,3 +125,6 @@ tools/cloudflared.exe
 *.bak
 *.bak-*
 logs/
+
+# 7. 内网穿透地址记录（不公开）
+公网地址.txt

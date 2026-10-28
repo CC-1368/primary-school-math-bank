@@ -269,12 +269,22 @@ def _page_evidence(path: str, mtime_ns: int, file_size: int):
                         "runs": tuple(component["runs"])}
         for component in components if "runs" in component
     }
+    # Lettering-sized components are the only extra evidence a diagram is
+    # allowed to recruit: vertex letters, 甲地/乙地, tick labels. Anything that
+    # belongs to a prose line is excluded here, before any frame can see it.
+    label_boxes = tuple(
+        tuple(component["bbox"]) for component in components
+        if 8 <= component["pixels"]
+        and component["bbox"][3] - component["bbox"][1] <= letter_height * 2.4
+        and component["bbox"][2] - component["bbox"][0] <= letter_height * 7
+        and not any(_contains(row, component["bbox"]) for row in text_rows)
+    )[:4000]
     return {"figures": tuple(figures), "text_rows": tuple(tuple([row[0] * 1000 / size[0], row[1] * 1000 / size[1],
              row[2] * 1000 / size[0], row[3] * 1000 / size[1]]) for row in text_rows),
             "significant_components": significant,
             "components": len(components), "large_components": len(large), "analysis_size": size,
             "source_size": source_size, "letter_height": letter_height,
-            "ink_mask": mask.tobytes(),
+            "ink_mask": mask.tobytes(), "label_boxes": label_boxes,
             "significant_runs": tuple(run_records.values()),
             "line_components": tuple(run_records[id(component)] for component in line_components)}
 
@@ -300,6 +310,418 @@ def _cuts_component(evidence: dict, bbox) -> bool:
         if inside >= 8 and outside > max(8, component["pixels"] * 0.01):
             return True
     return False
+
+
+FRAME_MAX_TRIM_RATIO = 0.45
+FRAME_MAX_GROW_RATIO = 0.30
+FRAME_MIN_AREA_RATIO = 0.12
+FRAME_PAD_PIXELS = 2
+FRAME_BLANK_VALUE = 3
+
+
+def _profile(strip: Image.Image) -> list[int]:
+    """Per-column (or per-row) mean ink of an L-mode mask, 0..255."""
+    return list(strip.tobytes())
+
+
+def _two_dimensional_ink(ink: Image.Image) -> tuple:
+    width, height = ink.size
+    columns = _profile(ink.resize((width, 1), Image.Resampling.BOX))
+    rows = _profile(ink.resize((1, height), Image.Resampling.BOX))
+    return columns, rows
+
+
+def _column_channels(ink: Image.Image) -> list[tuple[int, int]]:
+    """Blank gutters and thin printed rules that a crop must never straddle.
+
+    A three-up exam sheet separates printed pages with white gutters and a
+    dotted/solid binding rule; a two-column page has its own white gutter.
+    Both read as near-empty or as a single column of very dense ink, which no
+    illustration interior produces. A channel must stay narrow relative to the
+    page, otherwise the white interior of a large diagram would qualify.
+    """
+    width, height = ink.size
+    pixels = ink.tobytes()
+    profile = _profile(ink.resize((width, 1), Image.Resampling.BOX))
+    max_width = max(6, int(width * 0.08))
+    channels, start = [], None
+    for x, value in enumerate(profile):
+        blank = value <= 1
+        if blank and start is None:
+            start = x
+        elif not blank and start is not None:
+            if 3 <= x - start <= max_width:
+                channels.append((start, x))
+            start = None
+    if start is not None and 3 <= width - start <= max_width:
+        channels.append((start, width))
+    dense = [x for x, value in enumerate(profile) if value >= 120]
+    for x in dense:
+        if any(a <= x < b for a, b in channels):
+            continue
+        left = x
+        while left - 1 >= 0 and profile[left - 1] >= 120:
+            left -= 1
+        right = x
+        while right + 1 < width and profile[right + 1] >= 120:
+            right += 1
+        if right + 1 - left <= 4 and _is_continuous_rule(pixels, width, height, (left, right + 1)):
+            channels.append((left, right + 1))
+    return sorted(channels)
+
+
+def _is_continuous_rule(pixels: bytes, width: int, height: int, span) -> bool:
+    """True when a narrow x span carries ink along most of the page height.
+
+    A binding rule is a continuous line; a text column can be just as dense in
+    total ink but is broken between lines, which is what this separates.
+    """
+    samples = 40
+    hits = 0
+    for step in range(samples):
+        y = min(height - 1, int(height * (step + 0.5) / samples))
+        row = y * width
+        if any(pixels[row + x] for x in range(span[0], span[1])):
+            hits += 1
+    return hits >= samples * 0.8
+
+
+def _component_ink(evidence: dict, box) -> int:
+    """Ink of drawn components (not lettering) inside a frame."""
+    total = 0
+    for component in evidence["significant_runs"]:
+        for x0, y, x1 in component["runs"]:
+            if box[1] <= y < box[3]:
+                total += max(0, min(x1, box[2]) - max(x0, box[0]))
+    return total
+
+
+def _ink_mass(ink: Image.Image, box) -> int:
+    left, top, right, bottom = (max(0, int(box[0])), max(0, int(box[1])),
+                                min(ink.size[0], int(math.ceil(box[2]))),
+                                min(ink.size[1], int(math.ceil(box[3]))))
+    if right - left < 1 or bottom - top < 1:
+        return 0
+    crop = ink.crop((left, top, right, bottom))
+    return sum(crop.tobytes()) // 255
+
+
+def _clamp_columns(frame, ink, evidence, width, height):
+    """Never let a figure frame straddle a gutter, binding rule or page margin.
+
+    Which side survives is decided by *drawn* ink, not by total ink: a
+    neighbouring column of prose must never outweigh the illustration it
+    borders, and a band of empty margin must not decide anything by itself.
+    """
+    channels = _column_channels(ink)
+    if not channels:
+        return frame, []
+    notes = []
+    for _ in range(3):
+        changed = False
+        for left, right in channels:
+            if frame[2] <= left or frame[0] >= right:
+                continue
+            straddles = frame[0] < left and frame[2] > right
+            lands = (left <= frame[0] < right) or (left < frame[2] <= right)
+            if not (straddles or lands):
+                continue
+            left_box = (frame[0], frame[1], left, frame[3])
+            right_box = (right, frame[1], frame[2], frame[3])
+            keep_left = _component_ink(evidence, left_box)
+            keep_right = _component_ink(evidence, right_box)
+            if keep_left == keep_right:
+                keep_left = _ink_mass(ink, left_box)
+                keep_right = _ink_mass(ink, right_box)
+            if straddles:
+                if keep_left >= keep_right:
+                    frame = [frame[0], frame[1], left, frame[3]]
+                    changed = True
+                else:
+                    frame = [right, frame[1], frame[2], frame[3]]
+                    changed = True
+            elif left <= frame[0] < right and keep_right > keep_left:
+                frame = [right, frame[1], frame[2], frame[3]]
+                changed = True
+            elif left < frame[2] <= right and keep_left >= keep_right:
+                frame = [frame[0], frame[1], left, frame[3]]
+                changed = True
+        if not changed:
+            break
+        notes.append("已按栏间空白或装订线裁齐配图边界。")
+    return frame, list(dict.fromkeys(notes))
+
+
+def _trim_prose_rows(frame, evidence, width, height):
+    """Cut a stem/option line that the frame merely swallowed.
+
+    A removable line must span a good part of the frame, lie in its upper or
+    lower half, leave the bulk of the frame intact, be separated from the rest
+    by a visible blank gap (so a table cell's own line stays), and not be
+    enclosed by a drawn component — that is how a speech bubble's text looks.
+    """
+    notes = []
+    frame_ink = _ink_mass_bytes(evidence, frame)
+    if frame_ink <= 0:
+        return frame, notes
+
+    def row_ink(y):
+        return _ink_mass_bytes(evidence, (frame[0], y, frame[2], y + 1))
+
+    def blank_below(start, limit):
+        gap = 0
+        y = int(math.ceil(start))
+        while gap < limit and y < frame[3] and row_ink(y) == 0:
+            gap += 1
+            y += 1
+        return gap
+
+    def blank_above(start, limit):
+        gap = 0
+        y = int(math.floor(start))
+        while gap < limit and y > frame[1] and row_ink(y - 1) == 0:
+            gap += 1
+            y -= 1
+        return gap
+
+    for _ in range(4):
+        changed = False
+        for row in evidence["text_rows"]:
+            box = (row[0] * width / 1000, row[1] * height / 1000,
+                   row[2] * width / 1000, row[3] * height / 1000)
+            if _intersection(box, frame) <= 0:
+                continue
+            frame_h = frame[3] - frame[1]
+            frame_w = frame[2] - frame[0]
+            row_h = box[3] - box[1]
+            if row_h < 2 or row_h > frame_h * 0.30:
+                continue
+            if any(_contains(component["bbox"], box) for component in evidence["significant_runs"]):
+                continue
+            overlap_w = max(0, min(box[2], frame[2]) - max(box[0], frame[0])) / max(
+                1.0, min(frame_w, box[2] - box[0]))
+            if overlap_w < 0.35:
+                continue
+            if box[3] <= frame[1] + frame_h * 0.45 and frame[3] - box[3] >= frame_h * 0.55:
+                if blank_below(box[3] + 1, 3) >= 1:
+                    removed = _ink_mass_bytes(evidence, (frame[0], frame[1], frame[2], box[3] + 1))
+                    if removed <= frame_ink * 0.5:
+                        frame = [frame[0], box[3] + 1, frame[2], frame[3]]
+                        notes.append("已去掉混入配图框的题干或选项行。")
+                        changed = True
+                        break
+            if box[1] >= frame[3] - frame_h * 0.45 and box[1] - frame[1] >= frame_h * 0.55:
+                if blank_above(box[1] - 1, 3) >= 1:
+                    removed = _ink_mass_bytes(evidence, (frame[0], box[1] - 1, frame[2], frame[3]))
+                    if removed <= frame_ink * 0.5:
+                        frame = [frame[0], frame[1], frame[2], box[1] - 1]
+                        notes.append("已去掉混入配图框的题干或选项行。")
+                        changed = True
+                        break
+        if not changed:
+            break
+    return frame, list(dict.fromkeys(notes))
+
+
+def _ink_mass_bytes(evidence, box) -> int:
+    """Ink pixels inside a frame, from the cached analysis mask."""
+    width, height = evidence["analysis_size"]
+    pixels = evidence["ink_mask"]
+    left = max(0, min(width, int(box[0])))
+    right = max(left, min(width, int(math.ceil(box[2]))))
+    top = max(0, min(height, int(box[1])))
+    bottom = max(top, min(height, int(math.ceil(box[3]))))
+    if right - left < 1 or bottom - top < 1:
+        return 0
+    total = 0
+    for y in range(top, bottom):
+        total += pixels[y * width + left: y * width + right].count(255)
+    return total
+
+
+def _complete_cut_components(frame, evidence):
+    """Give back the part of a graphic that the frame sliced through.
+
+    Two kinds of own evidence qualify: a big drawn component the frame cuts,
+    and a lettering-sized component (vertex letters, 甲地/乙地, tick labels)
+    that the frame cuts or sits right next to. Paragraph ink never qualifies,
+    so a neighbouring stem still cannot be recruited.
+    """
+    notes = []
+    letter = max(4.0, float(evidence.get("letter_height") or 10.0))
+    for _ in range(3):
+        grown = list(frame)
+        for component in evidence["significant_runs"]:
+            box = component["bbox"]
+            if _intersection(box, frame) <= 0:
+                continue
+            inside = sum(max(0, min(x1, frame[2]) - max(x0, frame[0]))
+                         for x0, y, x1 in component["runs"] if frame[1] <= y < frame[3])
+            missing = component["pixels"] - inside
+            if inside < 12 or inside < component["pixels"] * 0.15:
+                continue
+            if missing <= max(12, component["pixels"] * 0.06):
+                continue
+            proposed, note = _bounded_union(frame, box, evidence=evidence)
+            if proposed is None:
+                continue
+            grown = proposed
+            notes.append(note or "已补全被裁框切掉一角的图形本体。")
+        for box in evidence.get("label_boxes") or ():
+            if _intersection(box, frame) > 0:
+                if _contains(frame, box):
+                    continue
+            elif _gap(frame, box) > letter * 1.2:
+                continue
+            proposed, _note = _bounded_union(frame, box, slack=letter * 1.2, evidence=evidence)
+            if proposed is None:
+                continue
+            grown = proposed
+            notes.append("已把图边被切掉的字母或地名标注补回框内。")
+        if grown == frame:
+            break
+        frame = grown
+    return frame, list(dict.fromkeys(notes))
+
+
+def _bounded_union(frame, box, slack: float = 4.0, evidence: dict | None = None):
+    """Union, but only when every moved edge stays inside the growth allowance.
+
+    A sliced graphic is the strongest evidence there is, so it may be completed
+    up to a whole drawn object; the allowance still stops a page border or a
+    merged table from swallowing the sheet.
+    """
+    proposed = list(_union(frame, box))
+    frame_w = max(1.0, frame[2] - frame[0])
+    frame_h = max(1.0, frame[3] - frame[1])
+    page_w = page_h = 0.0
+    if evidence:
+        page_w, page_h = evidence["analysis_size"]
+    limit_x = max(frame_w * FRAME_MAX_GROW_RATIO, page_w * 0.18) + slack
+    limit_y = max(frame_h * FRAME_MAX_GROW_RATIO, page_h * 0.18) + slack
+    if (frame[0] - proposed[0] > limit_x or proposed[2] - frame[2] > limit_x
+            or frame[1] - proposed[1] > limit_y or proposed[3] - frame[3] > limit_y):
+        return None, ""
+    if (proposed[2] - proposed[0]) * (proposed[3] - proposed[1]) > frame_w * frame_h * 4:
+        return None, ""
+    note = ""
+    if proposed[1] < frame[1] or proposed[3] > frame[3]:
+        note = "已补全被裁框切掉一角的图形本体。"
+    return proposed, note
+
+
+def _snap_edges(frame, ink):
+    """Drop the blank padding around a figure so the frame hugs its ink."""
+    width, height = ink.size
+    columns, rows = _two_dimensional_ink(ink)
+    notes = []
+    frame_w = max(1.0, frame[2] - frame[0])
+    frame_h = max(1.0, frame[3] - frame[1])
+    trim_x, trim_y = frame_w * FRAME_MAX_TRIM_RATIO, frame_h * FRAME_MAX_TRIM_RATIO
+
+    def ink_at(profile, index):
+        return 0 <= index < len(profile) and profile[index] > FRAME_BLANK_VALUE
+
+    original = list(frame)
+    trimmed = False
+    while frame[2] - frame[0] > 8 and not ink_at(columns, int(frame[0])) and original[0] - frame[0] < trim_x:
+        frame[0] += 1
+        trimmed = True
+    while frame[2] - frame[0] > 8 and not ink_at(columns, int(frame[2]) - 1) and frame[2] - original[2] < trim_x:
+        frame[2] -= 1
+        trimmed = True
+    while frame[3] - frame[1] > 8 and not ink_at(rows, int(frame[1])) and original[1] - frame[1] < trim_y:
+        frame[1] += 1
+        trimmed = True
+    while frame[3] - frame[1] > 8 and not ink_at(rows, int(frame[3]) - 1) and frame[3] - original[3] < trim_y:
+        frame[3] -= 1
+        trimmed = True
+    if trimmed:
+        notes.append("已收掉配图框四周的多余白边。")
+    return frame, notes
+
+
+def _ink_without_prose(ink: Image.Image, evidence: dict, width: int, height: int) -> Image.Image:
+    """Blank out detached prose lines so a border can never stop on the stem.
+
+    Geometry alone cannot tell a stem line from a dimension line, but the text
+    evidence can: only lines outside every drawn component are erased, so
+    lettering that belongs to a picture (vertex labels, a speech bubble) stays.
+    """
+    clean = ink.copy()
+    for row in evidence.get("text_rows") or ():
+        box = (row[0] * width / 1000, row[1] * height / 1000,
+               row[2] * width / 1000, row[3] * height / 1000)
+        if any(_contains(component["bbox"], box) for component in evidence["significant_runs"]):
+            continue
+        clean.paste(0, (int(box[0]) - 1, int(box[1]) - 1,
+                        int(math.ceil(box[2])) + 1, int(math.ceil(box[3])) + 1))
+    return clean
+
+
+def refine_figure_frame(image_path: str, bbox) -> dict:
+    """Rebuild an illustration frame on the page raster the model actually saw.
+
+    Vision models overshoot onto the stem, the option row, a neighbouring
+    column or the binding rule, and just as often cut a graphic in half. The
+    page raster settles both questions: text lines, gutters and the drawn
+    strokes are measurable, while the request itself carries no geometry to
+    trust. Corrections stay bounded and are skipped whenever the evidence is
+    unusable, so an unsupported page keeps the original rectangle.
+    """
+    original = _box(bbox)
+    result = {"bbox": list(original) if original else bbox,
+              "model_bbox": list(original) if original else bbox,
+              "changed": False, "method": "unchanged", "warnings": [], "notes": []}
+    if original is None:
+        result["warnings"] = ["配图坐标无效，未做栅格边界校正。"]
+        return result
+    try:
+        path = Path(image_path)
+        stat = path.stat()
+        evidence = _page_evidence(str(path.resolve()), stat.st_mtime_ns, stat.st_size)
+    except _EvidenceLimit as exc:
+        result["notes"] = [str(exc) + "；未做栅格边界校正，保留原图框。"]
+        return result
+    except (OSError, ValueError, Image.DecompressionBombError):
+        result["notes"] = ["原页图像不可读，未做栅格边界校正，保留原图框。"]
+        return result
+
+    width, height = evidence["analysis_size"]
+    ink = Image.frombytes("L", (width, height), evidence["ink_mask"])
+    frame = [original[0] * width / 1000, original[1] * height / 1000,
+             original[2] * width / 1000, original[3] * height / 1000]
+    start = list(frame)
+    notes = []
+    frame, column_notes = _clamp_columns(frame, ink, evidence, width, height)
+    notes.extend(column_notes)
+    frame, cut_notes = _complete_cut_components(frame, evidence)
+    notes.extend(cut_notes)
+    frame, row_notes = _trim_prose_rows(frame, evidence, width, height)
+    notes.extend(row_notes)
+    frame, snap_notes = _snap_edges(frame, _ink_without_prose(ink, evidence, width, height))
+    notes.extend(snap_notes)
+
+    pad = max(FRAME_PAD_PIXELS, int(round(float(evidence.get("letter_height") or 10.0) * 0.3)))
+    frame = [max(0.0, frame[0] - pad), max(0.0, frame[1] - pad),
+             min(float(width), frame[2] + pad), min(float(height), frame[3] + pad)]
+    if frame[2] - frame[0] < 4 or frame[3] - frame[1] < 4:
+        result["notes"] = notes + ["校正后的配图区域过小，保留原图框供核对。"]
+        return result
+    area_ratio = ((frame[2] - frame[0]) * (frame[3] - frame[1])) / max(1.0, (start[2] - start[0]) * (start[3] - start[1]))
+    if not FRAME_MIN_AREA_RATIO <= area_ratio <= 4.5:
+        result["notes"] = notes + ["校正幅度超出安全范围，保留原图框供核对。"]
+        return result
+    if _ink_mass_bytes(evidence, frame) < 12:
+        result["warnings"] = ["校正后的图框几乎没有内容，保留原图框，请核对裁剪位置。"]
+        return result
+    refined = [round(frame[0] * 1000 / width, 4), round(frame[1] * 1000 / height, 4),
+               round(frame[2] * 1000 / width, 4), round(frame[3] * 1000 / height, 4)]
+    if max(abs(refined[i] - original[i]) for i in range(4)) < 2:
+        result["notes"] = notes
+        return result
+    result.update(bbox=refined, changed=True, method="raster_frame", notes=notes)
+    return result
 
 
 def _text_only_frame(evidence: dict, bbox) -> bool:
