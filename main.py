@@ -7486,8 +7486,7 @@ def run_docx_parsing_task(
                 )
         if parsed_questions is None:
             DOCUMENT_TASKS.check_cancelled(task_id)
-            fallback_kwargs = {"connection_retry": False,
-                               "check_cancelled": lambda: DOCUMENT_TASKS.check_cancelled(task_id)}
+            fallback_kwargs = {"check_cancelled": lambda: DOCUMENT_TASKS.check_cancelled(task_id)}
             parsed_questions = parse_paper_text_internal(
                 locked_markdown_content,
                 False,  # Extract original answers; solve reviewed questions in the frontend.

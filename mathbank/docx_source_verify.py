@@ -20,7 +20,6 @@ from mathbank.ai_http import post_chat_completion
 from mathbank.ai_providers import apply_model_thinking_policy, resolve_ocr_provider
 from mathbank.asset_security import resolve_upload_asset
 from mathbank.content_locks import _source_parts, _plain_key, _IMAGE_REFERENCE, _REFERENCE, _NUMBER, _bare_math_spelling, _formulas
-from mathbank.document_requests import DOCUMENT_AI_TIMEOUT_SECONDS
 from mathbank.paths import UPLOADS_DIR, TEST_UPLOADS_DIR
 from mathbank.source_review_images import prepare_candidate_images, _visible_text, _references
 from mathbank.source_review_results import parse_review_response
@@ -28,6 +27,9 @@ from mathbank.source_review_repair import MAX_EXTRA_CALLS, RepairStopped, repair
 from mathbank.task_manager import TaskCancelled
 
 MAX_CALLS = 8
+# Word 源审核单次核验的等待上限。Word 批次比 PDF 整页视觉核验轻得多，
+# 用统一的 600 秒只会让卡死的请求拖住导入流程。
+WORD_REVIEW_TIMEOUT_SECONDS = 120
 MAX_ITEMS = 6
 MAX_PAGES = 4
 MAX_CHARS = 24000
@@ -569,7 +571,7 @@ def verify_docx_source_suspicions(questions, diagnostics, source, evidence, *, c
             payload.pop('max_tokens' if cap_key == 'max_completion_tokens' else 'max_completion_tokens', None)
             check_cancelled()
             report['calls'] += 1
-            response = post_chat_completion(provider, payload, timeout=DOCUMENT_AI_TIMEOUT_SECONDS,
+            response = post_chat_completion(provider, payload, timeout=WORD_REVIEW_TIMEOUT_SECONDS,
                                             check_status=False, retry_connection=False)
             check_cancelled()
             check_render_evidence()
