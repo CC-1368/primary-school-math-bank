@@ -44,7 +44,11 @@ def test_shared_paths_are_absolute_and_project_anchored():
 
 
 def test_only_pep_curriculum_resource_is_shipped():
-    """教材版本切换已下线，只保留人教版大纲资源。"""
+    """教材版本切换已下线：预设接口不再暴露，但大纲资源仍随包发布。
+
+    B/S/H 只服务于库内既有题目的版本映射，前端不再提供切换入口
+    （见 test_api.test_curriculum_switch_removed）。
+    """
     preset = get_curriculum_preset("A")
     assert preset["version"] == "A"
     assert preset["metadata"]["curriculum"] == load_curriculum("A")
@@ -52,10 +56,11 @@ def test_only_pep_curriculum_resource_is_shipped():
     assert preset["metadata"]["difficulties"]
 
     shipped = sorted(p.stem for p in CURRICULUMS_DIR.glob("*.json"))
-    assert shipped == ["A"]
-    for removed in ("B", "S", "H"):
-        with pytest.raises(ValueError):
-            load_curriculum(removed)
+    assert "A" in shipped
+    for version in shipped:
+        assert get_curriculum_preset(version)["version"] == version
+    with pytest.raises(ValueError):
+        load_curriculum("unknown")
 
 
 def test_solve_prompt_builder_preserves_required_structure():

@@ -1,26 +1,33 @@
-import pytest
+"""本项目只发行人教版目录：任何外来目录都按 A 落库，不产生第二份映射。"""
 from main import LOCAL_TOKEN
-from mathbank.database import Question, QuestionCurriculum, init_db
+from mathbank.database import QuestionCurriculum, init_db
 
-def test_curriculum_coexistence_and_migration(client, db_session):
-    # Initialize the test DB index and initial migrations
+
+A_CURRICULUM = {
+    "必修一": {"1. 集合与常用逻辑用语": ["1.1"]},
+    "必修二": {"6. 平面向量及其应用": ["6.1"]},
+}
+
+
+def _rows(db_session, question_id):
+    db_session.expire_all()
+    return [
+        (row.version_code, row.compulsory, row.chapter, row.knowledge)
+        for row in db_session.query(QuestionCurriculum).filter_by(question_id=question_id)
+    ]
+
+
+def test_single_version_mapping_survives_metadata_switch(client, db_session):
     init_db()
 
-    # Reset metadata cache to A-version default to ensure test independence from local configuration
     import main
     main.METADATA_CACHE = {
         "question_types": [],
         "difficulties": [],
-        "curriculum": {
-            "必修一": {
-                "1. 集合与常用逻辑用语": ["1.1"]
-            }
-        }
+        "curriculum": {"必修一": {"1. 集合与常用逻辑用语": ["1.1"]}},
     }
 
     headers = {"X-Local-Token": LOCAL_TOKEN}
-
-    # 1. Create a question under Renjiao A (active by default)
     payload = {
         "content": "测试向量题干 $a+b$",
         "question_type": "single_choice",
@@ -34,107 +41,64 @@ def test_curriculum_coexistence_and_migration(client, db_session):
         "tikz_code": "",
         "tags": "",
         "related_question_id": "",
-        "image_paths": "[]"
+        "image_paths": "[]",
     }
-    
+
     response = client.post("/api/questions", data=payload, headers=headers)
     assert response.status_code == 200
     question_id = response.json()["question"]["id"]
+    assert _rows(db_session, question_id) == [
+        ("A", "必修二", "6. 平面向量及其应用", "平面向量的数量积")
+    ]
 
-    # Verify that it exists in QuestionCurriculum for version 'A'
-    mapping_a = db_session.query(QuestionCurriculum).filter_by(
-        question_id=question_id, version_code="A"
-    ).first()
-    assert mapping_a is not None
-    assert mapping_a.compulsory == "必修二"
-    assert mapping_a.chapter == "6. 平面向量及其应用"
-    assert mapping_a.knowledge == "平面向量的数量积"
-
-    # 2. Test changing metadata config version to B (which automatically triggers migration from A to B)
-    # Save a metadata payload configured with curriculumB (Renjiao B)
-    from main import METADATA_CACHE
-    new_metadata_payload = {
-        "question_types": METADATA_CACHE["question_types"],
-        "difficulties": METADATA_CACHE["difficulties"],
+    # 1. 保存一份「看起来像别的版本」的目录：版本判定仍是 A，
+    #    不会凭空多出一份映射，也不会改写已有题目的分类。
+    foreign_curriculum = {
+        "question_types": main.METADATA_CACHE["question_types"],
+        "difficulties": main.METADATA_CACHE["difficulties"],
         "curriculum": {
-            "必修一": {
-                "第一章 集合与常用逻辑用语": ["1.1 集合"]
-            },
-            "必修二": {
-                "第六章 平面向量初步": ["6.1"]
-            },
-            "必修三": {
-                "第八章 向量的数量积与三角恒等变换": ["8.1"]
-            }
-        }
+            "必修一": {"第一章 集合与常用逻辑用语": ["1.1 集合"]},
+            "必修二": {"第六章 平面向量初步": ["6.1"]},
+            "必修三": {"第八章 向量的数量积与三角恒等变换": ["8.1"]},
+        },
     }
-
-    response = client.post("/api/config/metadata", json=new_metadata_payload, headers=headers)
+    response = client.post("/api/config/metadata", json=foreign_curriculum, headers=headers)
     assert response.status_code == 200
+    assert response.json()["curriculum_version"] == "A"
+    assert _rows(db_session, question_id) == [
+        ("A", "必修二", "6. 平面向量及其应用", "平面向量的数量积")
+    ]
+    fetched = client.get(f"/api/questions/{question_id}").json()
+    assert fetched["category_compulsory"] == "必修二"
+    assert fetched["category_chapter"] == "6. 平面向量及其应用"
+    assert fetched["category_knowledge"] == "平面向量的数量积"
 
-    # Verify that a 'B' version mapping was automatically created and aligned during metadata save
-    mapping_b = db_session.query(QuestionCurriculum).filter_by(
-        question_id=question_id, version_code="B"
-    ).first()
-    assert mapping_b is not None
-    assert mapping_b.compulsory == "必修三"
-    assert mapping_b.chapter == "第八章 向量的数量积与三角恒等变换"
-    assert mapping_b.knowledge == "" # Leaf knowledge is reset to empty for B
-
-    # Query the question and verify its main category fields are now updated to B-version!
-    response = client.get(f"/api/questions/{question_id}")
-    assert response.status_code == 200
-    fetched_q = response.json()
-    assert fetched_q["category_compulsory"] == "必修三"
-    assert fetched_q["category_chapter"] == "第八章 向量的数量积与三角恒等变换"
-    assert fetched_q["category_knowledge"] == ""
-
-    # 3. Test updating the question category under B-version
-    update_payload = payload.copy()
+    # 2. 更新题目分类：只更新那唯一一条 A 映射，不会为别的版本各写一份。
+    update_payload = dict(payload)
     update_payload["content"] = "更新向量题干"
-    update_payload["category_compulsory"] = "必修二"
     update_payload["category_chapter"] = "第六章 平面向量初步"
     update_payload["category_knowledge"] = "6.1"
-
     response = client.put(f"/api/questions/{question_id}", data=update_payload, headers=headers)
     assert response.status_code == 200
+    assert _rows(db_session, question_id) == [
+        ("A", "必修二", "第六章 平面向量初步", "6.1")
+    ]
 
-    # Verify B-version mapping is updated
-    mapping_b_updated = db_session.query(QuestionCurriculum).filter_by(
-        question_id=question_id, version_code="B"
-    ).first()
-    assert mapping_b_updated.compulsory == "必修二"
-    assert mapping_b_updated.chapter == "第六章 平面向量初步"
-    assert mapping_b_updated.knowledge == "6.1"
-
-    # Verify original A-version mapping is still preserved and untouched!
-    mapping_a_preserved = db_session.query(QuestionCurriculum).filter_by(
-        question_id=question_id, version_code="A"
-    ).first()
-    assert mapping_a_preserved.compulsory == "必修二"
-    assert mapping_a_preserved.chapter == "6. 平面向量及其应用"
-    assert mapping_a_preserved.knowledge == "平面向量的数量积"
-
-    # 4. Switch metadata back to A-version
-    revert_metadata_payload = {
-        "question_types": METADATA_CACHE["question_types"],
-        "difficulties": METADATA_CACHE["difficulties"],
-        "curriculum": {
-            "必修一": {
-                "1. 集合与常用逻辑用语": ["1.1"]
-            },
-            "必修二": {
-                "6. 平面向量及其应用": ["6.1"]
-            }
-        }
-    }
-    response = client.post("/api/config/metadata", json=revert_metadata_payload, headers=headers)
+    # 3. 切回人教版目录：映射与题目分类都保持原样，不被清空或替换。
+    response = client.post(
+        "/api/config/metadata",
+        json={
+            "question_types": main.METADATA_CACHE["question_types"],
+            "difficulties": main.METADATA_CACHE["difficulties"],
+            "curriculum": A_CURRICULUM,
+        },
+        headers=headers,
+    )
     assert response.status_code == 200
-
-    # Query the question and verify its main category fields are reverted back to A-version!
-    response = client.get(f"/api/questions/{question_id}")
-    assert response.status_code == 200
-    reverted_q = response.json()
-    assert reverted_q["category_compulsory"] == "必修二"
-    assert reverted_q["category_chapter"] == "6. 平面向量及其应用"
-    assert reverted_q["category_knowledge"] == "平面向量的数量积"
+    assert _rows(db_session, question_id) == [
+        ("A", "必修二", "第六章 平面向量初步", "6.1")
+    ]
+    fetched = client.get(f"/api/questions/{question_id}").json()
+    assert fetched["category_compulsory"] == "必修二"
+    assert fetched["category_chapter"] == "第六章 平面向量初步"
+    assert fetched["category_knowledge"] == "6.1"
