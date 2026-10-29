@@ -1372,7 +1372,7 @@ def build_latex_document(
                     remaining_space = max(0.0, space_val - figure_solution_box_height) if (
                         fig_body and figure_in_solution_box) else space_val
                     if remaining_space > 0:
-                        lines.append(f"\\mathbanksolutionspace{{{remaining_space:.1f}cm}}")
+                        lines.append(f"\\vspace*{{{remaining_space:.1f}cm}}")
 
             lines.append(f"\\end{{{env_name}}}")
 

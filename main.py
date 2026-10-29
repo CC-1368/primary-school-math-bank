@@ -914,7 +914,7 @@ def read_index():
         html_content = html_content.replace('/static/favicon.png', f'/static/favicon.png?v={fav_mtime}')
             
         # Inject the token and server_instance_id directly into index.html to bypass any cookie blocking policies
-        token_script = f'<script>window.__localToken = "{LOCAL_TOKEN}"; window.__serverInstanceId = "{SERVER_INSTANCE_ID}"; window.__qaEnabled = {json.dumps(qa_enabled)}; window.__pdfCloudOnly = {json.dumps(PDF_CLOUD_ONLY)};</script>'
+        token_script = f'<script>window.__localToken = "{LOCAL_TOKEN}"; window.__serverInstanceId = "{SERVER_INSTANCE_ID}"; window.__qaEnabled = {json.dumps(qa_enabled)}; window.__pdfCloudOnly = {json.dumps(bool(globals().get("PDF_CLOUD_ONLY", True)))};</script>'
         html_content = html_content.replace('<head>', f'<head>\n    {token_script}')
             
         res = HTMLResponse(content=html_content)
