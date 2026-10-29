@@ -195,7 +195,10 @@ def _references(value: str, identifier: str, field: str) -> list[dict]:
 
 
 def _stat_key(status) -> tuple:
-    return status.st_dev, status.st_ino, status.st_size, status.st_mtime_ns, status.st_ctime_ns
+    # 不用 st_ctime_ns：Windows 上它由目录项惰性刷新，刚写完的文件 os.stat 与
+    # os.fstat 会差几十微秒，拿它判断"读取期间被替换"会把正常文件判成已变更。
+    # dev+ino+size+mtime 足以识别替换或改写在读期间发生。
+    return status.st_dev, status.st_ino, status.st_size, status.st_mtime_ns
 
 
 def _read_image(reference: str, allowed: set[str], uploads_dir, test_uploads_dir) -> tuple[dict, bytes]:
