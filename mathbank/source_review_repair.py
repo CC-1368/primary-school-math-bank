@@ -15,10 +15,13 @@ import re
 
 from mathbank import prompts
 from mathbank.ai_providers import apply_model_thinking_policy
-from mathbank.document_requests import DOCUMENT_AI_TIMEOUT_SECONDS
 from mathbank.source_review_images import _references
 from mathbank.source_review_results import parse_review_response
 from mathbank.task_manager import TaskCancelled
+
+
+# 一次修复/复核只发一道小题，超时按单题预算算，不沿用整份文档的 600 秒。
+REPAIR_TIMEOUT_SECONDS = 120
 
 MAX_ROUNDS = 3
 MAX_EXTRA_CALLS = 12  # Shared by all batches in a document; two calls per round.
@@ -92,7 +95,7 @@ def repair_verified_differences(items, decisions, *, provider, request, attachme
                                 verification_content, parse_verdicts, validate_output,
                                 check_evidence, check_cancelled, budget, max_chars=24000,
                                 max_output_tokens=4096, progress=lambda message: None,
-                                timeout_seconds=DOCUMENT_AI_TIMEOUT_SECONDS):
+                                timeout_seconds=REPAIR_TIMEOUT_SECONDS):
     """Return confirmed outputs and audit records; never mutate caller questions.
 
     Adapters reapply their local gates to every edited candidate and verify the
