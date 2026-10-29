@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import shutil
 import subprocess
+import tempfile
 
 import pytest
 
@@ -52,6 +53,9 @@ const localStorage={getItem:key=>draftStorage[key]||null,setItem:(key,value)=>{d
 const requests=[];
 let fetch=(url,options)=>new Promise(resolve=>requests.push({url,options,resolve}));
 let questionDetailLoading=false,saveQuestionInFlight=null,activeSidebarTab='bank';
+let referenceRefreshSequence=0,referenceRefreshController=null;
+// 引用基线刷新属于编辑器的独立流程，这里只保证保存路径可调用。
+window.refreshCurrentQuestionReferences = async () => false;
 const old='/static/uploads/tmp/figure.png',final='/static/uploads/figure.png';
 const reference='/static/uploads/tmp/reference.png',finalReference='/static/uploads/reference.png';
 const mark=path=>`![插图](${path})`;
@@ -74,9 +78,14 @@ SOURCES = (
 def run_js(checks, sources=SOURCES):
     node = shutil.which('node')
     assert node, 'Node is required for isolated frontend regression checks'
-    result = subprocess.run([node, '-e', COMMON + sources + '\n(async()=>{\n' + checks
-                             + '\n})().catch(error=>{console.error(error);process.exitCode=1;});'],
-                            capture_output=True, text=True, cwd=ROOT)
+    script = (COMMON + sources + '\n(async()=>{\n' + checks
+              + '\n})().catch(error=>{console.error(error);process.exitCode=1;});')
+    # Windows 单个命令行上限约 8k 字符，harness 早已超出（WinError 206）。
+    # 写临时文件再执行，与 POSIX 行为一致。
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / 'harness.js'
+        path.write_text(script, encoding='utf-8')
+        result = subprocess.run([node, str(path)], capture_output=True, text=True, cwd=ROOT)
     assert result.returncode == 0, result.stderr + result.stdout
 
 

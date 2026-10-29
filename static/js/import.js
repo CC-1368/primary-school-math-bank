@@ -6042,47 +6042,6 @@
             }
         }
 
-        function renderParsedKnowledgePoints(card, question, index) {
-            const host = card.querySelector('.card-knowledge-points');
-            if (!host) return;
-            host.replaceChildren();
-            const labels = KnowledgePointState.normalize(question.knowledge_points);
-            const warnings = (Array.isArray(question.knowledge_point_warnings) ? question.knowledge_point_warnings : [])
-                .filter(item => typeof item === 'string');
-            if (!labels.length && !warnings.length) { host.hidden = true; return; }
-            host.hidden = false;
-            host.append(knowledgePointNode('strong', '知识点分类', 'text-xs text-slate-700'));
-            const change = callback => {
-                if (parsedQuestionsData[index] !== question || card.__sourceQuestion !== question) return;
-                question.knowledge_points = callback(KnowledgePointState.normalize(question.knowledge_points));
-                renderParsedKnowledgePoints(card, question, index);
-                updateParsedSavedState(index);
-                window.MathBankDocumentImportSession?.saveSoon();
-            };
-            labels.forEach(item => {
-                const row = knowledgePointNode('div', '', 'flex flex-wrap items-center gap-2 text-[11px]');
-                row.append(knowledgePointNode('span', item.name || item.code));
-                const role = document.createElement('select'); role.className = 'glass-select text-[11px]';
-                role.setAttribute('aria-label', (item.name || item.code) + '考查作用');
-                [['main', '主要考查'], ['auxiliary', '辅助涉及']].forEach(([value, text]) => {
-                    const option = knowledgePointNode('option', text); option.value = value; role.append(option);
-                });
-                role.value = item.role; role.addEventListener('change', () => change(items =>
-                    items.map(point => point.code === item.code ? {...point, role: role.value} : point)));
-                row.append(role);
-                row.append(knowledgePointButton('移除', () => change(items => items.filter(point => point.code !== item.code))));
-                if (item.evidence || item.reason) {
-                    const details = document.createElement('details'); details.className = 'w-full text-slate-500';
-                    details.append(knowledgePointNode('summary', '查看依据'));
-                    if (typeof item.evidence === 'string') details.append(knowledgePointNode('p', item.evidence));
-                    if (typeof item.reason === 'string') details.append(knowledgePointNode('p', item.reason));
-                    row.append(details);
-                }
-                host.append(row);
-            });
-            warnings.forEach(message => host.append(knowledgePointNode('p', message, 'text-[11px] text-amber-700')));
-        }
-
         function renderParsedQuestionsList(questions) {
             const options = arguments.length > 1 && arguments[1] ? arguments[1] : {};
             const container = document.getElementById('parsedCardsContainer');
@@ -6288,6 +6247,67 @@
 
             if (typeof updateSelectedCount === 'function') updateSelectedCount();
             if (options.saveDraft !== false) window.MathBankDocumentImportSession?.saveSoon();
+        }
+
+        // 卡片内的知识点编辑区。这里自带节点工厂、并对全局状态做兜底：
+        // 导入页在不同脚本组合下加载，缺 editor.js 的 helper 时不能整张卡渲染失败。
+        function renderParsedKnowledgePoints(card, question, index) {
+            const host = card && card.querySelector ? card.querySelector('.card-knowledge-points') : null;
+            if (!host) return;
+            host.innerHTML = '';
+            const state = window.KnowledgePointState;
+            const rawLabels = Array.isArray(question && question.knowledge_points) ? question.knowledge_points : [];
+            const labels = typeof state?.normalize === 'function' ? state.normalize(rawLabels)
+                : rawLabels.filter(item => item && typeof item === 'object' && !Array.isArray(item))
+                    .map(item => ({...item, code: String(item.code || '').trim(), name: String(item.name || '').trim(),
+                        role: item.role === 'auxiliary' ? 'auxiliary' : 'main'}));
+            const warnings = (Array.isArray(question.knowledge_point_warnings) ? question.knowledge_point_warnings : [])
+                .filter(item => typeof item === 'string');
+            if (!labels.length && !warnings.length) { host.hidden = true; return; }
+            host.hidden = false;
+            const node = (tag, text = '', className = '') => {
+                const created = document.createElement(tag);
+                created.textContent = text;
+                if (className) created.className = className;
+                return created;
+            };
+            const button = (text, action) => {
+                const created = node('button', text, 'glass-btn mb-kp-button');
+                created.type = 'button';
+                created.addEventListener('click', event => { event.stopPropagation(); action(event); });
+                return created;
+            };
+            host.append(node('strong', '知识点分类', 'text-xs text-slate-700'));
+            const change = callback => {
+                if (parsedQuestionsData[index] !== question || card.__sourceQuestion !== question) return;
+                const current = typeof state?.normalize === 'function' ? state.normalize(question.knowledge_points) : labels;
+                question.knowledge_points = callback(current);
+                renderParsedKnowledgePoints(card, question, index);
+                if (typeof updateParsedSavedState === 'function') updateParsedSavedState(index);
+                window.MathBankDocumentImportSession?.saveSoon();
+            };
+            labels.forEach(item => {
+                const row = node('div', '', 'flex flex-wrap items-center gap-2 text-[11px]');
+                row.append(node('span', item.name || item.code));
+                const role = document.createElement('select'); role.className = 'glass-select text-[11px]';
+                role.setAttribute('aria-label', (item.name || item.code) + '考查作用');
+                [['main', '主要考查'], ['auxiliary', '辅助涉及']].forEach(([value, text]) => {
+                    const option = node('option', text); option.value = value; role.append(option);
+                });
+                role.value = item.role; role.addEventListener('change', () => change(items =>
+                    items.map(point => point.code === item.code ? {...point, role: role.value} : point)));
+                row.append(role);
+                row.append(button('移除', () => change(items => items.filter(point => point.code !== item.code))));
+                if (item.evidence || item.reason) {
+                    const details = document.createElement('details'); details.className = 'w-full text-slate-500';
+                    details.append(node('summary', '查看依据'));
+                    if (typeof item.evidence === 'string') details.append(node('p', item.evidence));
+                    if (typeof item.reason === 'string') details.append(node('p', item.reason));
+                    row.append(details);
+                }
+                host.append(row);
+            });
+            warnings.forEach(message => host.append(node('p', message, 'text-[11px] text-amber-700')));
         }
 
         function setupCardCategoryLinkage(card, q) {
