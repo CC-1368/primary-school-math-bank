@@ -28,6 +28,21 @@ def _sqlite_connection(path):
             yield connection
 
 
+def _create_full_schema_database(path, content="future"):
+    """用真实 ORM 建库：备份会按 schema 版本校验必需表，最小 DDL 已不够用。"""
+    from sqlalchemy import create_engine
+
+    from mathbank.database import Base
+
+    engine = create_engine(f"sqlite:///{path}")
+    try:
+        Base.metadata.create_all(engine)
+    finally:
+        engine.dispose()
+    with _sqlite_connection(path) as connection:
+        connection.execute("INSERT INTO questions (id, content) VALUES (1, ?)", (content,))
+
+
 def _create_database(path, question_count=1, image_paths=None, content=None, answer=None):
     with _sqlite_connection(path) as connection:
         connection.executescript(
@@ -304,21 +319,9 @@ def test_restore_rejects_future_schema_before_replacing_current_database(tmp_pat
     current_database = tmp_path / "current.db"
     uploads = tmp_path / "uploads"
     uploads.mkdir()
-    _create_database(future_database, content="future")
+    _create_full_schema_database(future_database, content="future")
     with _sqlite_connection(future_database) as connection:
         connection.execute(f"PRAGMA user_version={LATEST_SCHEMA_VERSION + 1}")
-        connection.execute(
-            "CREATE TABLE question_fingerprints ("
-            "question_id INTEGER NOT NULL, fingerprint_version INTEGER NOT NULL, "
-            "PRIMARY KEY(question_id, fingerprint_version))"
-        )
-        connection.execute(
-            "CREATE TABLE question_sub_knowledge ("
-            "id INTEGER PRIMARY KEY, curriculum_id INTEGER NOT NULL "
-            "REFERENCES question_curriculums(id) ON DELETE CASCADE, "
-            "compulsory TEXT NOT NULL, chapter TEXT NOT NULL, knowledge TEXT NOT NULL, "
-            "position INTEGER NOT NULL)"
-        )
     archive = create_full_backup(
         output_dir=tmp_path / "snapshots",
         database_path=future_database,

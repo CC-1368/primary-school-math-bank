@@ -408,7 +408,8 @@ def _write_zip_atomic(
             for path in sorted(payload_dir.rglob("*")):
                 if path.is_file():
                     archive.write(path, path.relative_to(payload_dir).as_posix())
-        with temp_path.open("rb") as handle:
+        # Windows 上 os.fsync 只接受可写句柄，用 rb 打开会直接抛 EBADF。
+        with temp_path.open("rb+") as handle:
             os.fsync(handle.fileno())
         os.replace(temp_path, output_path)
         output_path.chmod(0o600)
@@ -1239,7 +1240,7 @@ def _restore_full_backup_unlocked(
                 for name in sorted(_CONTENT_SOURCE_MEMBERS):
                     shutil.copy2(extracted / name, sources_temp / name)
                     (sources_temp / name).chmod(0o600)
-                    with (sources_temp / name).open("rb") as handle:
+                    with (sources_temp / name).open("rb+") as handle:
                         os.fsync(handle.fileno())
                 _fsync_directory(sources_temp)
             for current, old in originals:
