@@ -11,7 +11,10 @@ import json
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from mathbank.paths import PROJECT_ROOT
+try:
+    from mathbank.paths import PROJECT_ROOT
+except ImportError:  # 直接导入（发布守卫的桩环境）可能只提供部分 paths 模块
+    PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
 CONTENT_SOURCES_PATH = PROJECT_ROOT / "mathbank" / "resources" / "content_sources.json"
