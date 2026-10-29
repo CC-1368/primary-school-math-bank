@@ -1,11 +1,36 @@
 from pathlib import Path
 import shutil
 import subprocess
+import tempfile
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 STATIC_DIR = PROJECT_ROOT / "static"
 STATIC_JS_DIR = STATIC_DIR / "js"
+
+
+def run_node(script: str) -> subprocess.CompletedProcess:
+    """Run one generated frontend harness through node.
+
+    Windows caps a single command line at roughly 8K characters, so handing a
+    whole harness to ``node -e`` fails with WinError 206 before node starts.
+    Writing the script to a temp file keeps the same isolation without the cap.
+    """
+    node = shutil.which("node")
+    assert node, "Node.js is required for the frontend executable regression"
+    handle = tempfile.NamedTemporaryFile("w", suffix=".js", encoding="utf-8", delete=False)
+    try:
+        handle.write(script)
+        handle.close()
+        return subprocess.run(
+            [node, handle.name],
+            cwd=PROJECT_ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+    finally:
+        Path(handle.name).unlink(missing_ok=True)
 
 
 def _read(path: Path) -> str:
@@ -43,7 +68,9 @@ def test_untrusted_html_uses_dompurify_and_local_image_allowlist():
     assert "sanitizeRichHtml(preprocessFormulaForKaTeX(text, imageLayouts))" in editor_source
     assert "MathBankSafe.safeImageUrl(src)" in editor_source
     assert "MathBankSafe.safeImageUrl(m[1])" in paper_source
-    assert "window.parseMarkdownWithMath(html)" in paper_source
+    # 组卷端渲染必须走带净化与 KaTeX 处理的共享解析器，而不是直接塞 innerHTML。
+    assert "window.parseMarkdownWithMath(" in paper_source
+    assert "window.MathBankSafe.sanitizeRichHtml(" in paper_source
     assert "MathBankSafe.sanitizeRichHtml(html)" in import_source
     assert "MathBankSafe.escapeAttribute(rawModel)" in api_source
     assert r"\.(?:png|jpe?g|gif|webp)$" in api_source
@@ -72,13 +99,7 @@ if (escaped !== '$x&lt;y$ and $y&gt;z$ &lt;not-a-tag&gt;') {{
 }}
 """
 
-    result = subprocess.run(
-        [node, "-e", script],
-        cwd=PROJECT_ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+    result = run_node(script)
     assert result.returncode == 0, result.stderr
 
 
@@ -90,9 +111,15 @@ def test_category_refresh_only_reloads_editor_when_explicitly_requested():
     helper_start = api_source.index("function loadCategories(options = {})")
     helper_end = api_source.index("// Populate Metadata Select Option Lists", helper_start)
     helper_source = api_source[helper_start:helper_end]
+    # loadCategories 在刷新后要用 systemMetadata 的规范化函数；把真实现一并注入，
+    # 避免用 no-op 桩掩盖题型归一规则的回归。
+    canonical_start = api_source.index("const CANONICAL_QUESTION_TYPES")
+    canonical_end = api_source.index("let systemMetadata =", canonical_start)
+    canonical_source = api_source[canonical_start:canonical_end]
     assert "backupEditorState" not in helper_source
     script = f"""
 const window = {{}};
+{canonical_source}
 let systemMetadata = {{}};
 let categoryTree = {{}};
 let reloads = 0;
@@ -117,13 +144,7 @@ function fetch(url) {{
 }})().catch(error => {{ console.error(error); process.exitCode = 1; }});
 """
 
-    result = subprocess.run(
-        [node, "-e", script],
-        cwd=PROJECT_ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+    result = run_node(script)
     assert result.returncode == 0, result.stderr
 
 
@@ -166,13 +187,7 @@ if (window.reloadCurrentQuestionSilently() !== true || selections !== 1) {{
 }}
 """
 
-    result = subprocess.run(
-        [node, "-e", script],
-        cwd=PROJECT_ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+    result = run_node(script)
     assert result.returncode == 0, result.stderr
 
 
@@ -241,13 +256,7 @@ if (isAiSolveRequestCurrent(oldSequence, oldController, oldSnapshot)) {{
 }}
 """
 
-    result = subprocess.run(
-        [node, "-e", script],
-        cwd=PROJECT_ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+    result = run_node(script)
     assert result.returncode == 0, result.stderr
 
 
@@ -295,13 +304,7 @@ if (idleClears !== 0 || toasts !== feedbackAfterAbort) {{
 }}
 """
 
-    result = subprocess.run(
-        [node, "-e", script],
-        cwd=PROJECT_ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+    result = run_node(script)
     assert result.returncode == 0, result.stderr
 
 
@@ -353,13 +356,7 @@ function showToast() {{}}
 }})().catch(error => {{ console.error(error); process.exitCode = 1; }});
 """
 
-    result = subprocess.run(
-        [node, "-e", script],
-        cwd=PROJECT_ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+    result = run_node(script)
     assert result.returncode == 0, result.stderr
 
 
@@ -418,13 +415,7 @@ if (compileCalls !== 1 || openCalls !== 1 || !workbenchCode.value.includes('tikz
 }}
 """
 
-    result = subprocess.run(
-        [node, "-e", script],
-        cwd=PROJECT_ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+    result = run_node(script)
     assert result.returncode == 0, result.stderr
 
 
@@ -489,13 +480,7 @@ const EditorState = {{ isCurrent: () => true }};
 }})().catch(error => {{ console.error(error); process.exitCode = 1; }});
 """
 
-    result = subprocess.run(
-        [node, "-e", script],
-        cwd=PROJECT_ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+    result = run_node(script)
     assert result.returncode == 0, result.stderr
 
 
@@ -625,13 +610,7 @@ const document = {{ getElementById(id) {{ return id.startsWith('parsed-card-') ?
 }})().catch(error => {{ console.error(error); process.exitCode = 1; }});
 """
 
-    result = subprocess.run(
-        [node, "-e", script],
-        cwd=PROJECT_ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+    result = run_node(script)
     assert result.returncode == 0, result.stderr
 
 
@@ -682,13 +661,7 @@ if (activeDocumentPoll !== newIdentity) {{
 if (!finishDocumentPoll(newIdentity)) throw new Error('current terminal callback was rejected');
 """
 
-    result = subprocess.run(
-        [node, "-e", script],
-        cwd=PROJECT_ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+    result = run_node(script)
     assert result.returncode == 0, result.stderr
 
 
@@ -768,6 +741,12 @@ def test_request_snapshot_keeps_post_submit_edits_dirty_in_real_js():
     helper_start = editor_source.index("function backupEditorState")
     helper_end = editor_source.index("// Custom Premium Confirmation Modal", helper_start)
     helper_source = editor_source[helper_start:helper_end]
+    # backupEditorState 用 api.js 的 KnowledgePointState 归一份快照；真实现
+    # 一并切进来，避免用桩掩盖归一规则的回归。
+    api_source = _read(STATIC_JS_DIR / "api.js")
+    knowledge_start = api_source.index("const KnowledgePointState = (() => {")
+    knowledge_end = api_source.index("window.KnowledgePointState = KnowledgePointState;", knowledge_start)
+    knowledge_source = api_source[knowledge_start:knowledge_end]
     script = f"""
 const window = {{}};
 let originalQuestionState = null;
@@ -810,6 +789,7 @@ const elements = Object.fromEntries(
 const document = {{
   getElementById(id) {{ return elements[id] || null; }}
 }};
+{knowledge_source}
 {helper_source}
 const requestSnapshot = Object.freeze({{
   content: 'request payload',
@@ -867,13 +847,7 @@ if (FigureLayoutState.align !== 'center' || FigureLayoutState.size !== 'medium')
 if (!isEditorModified()) throw new Error('newer editor-only layout was incorrectly marked saved');
 """
 
-    result = subprocess.run(
-        [node, "-e", script],
-        cwd=PROJECT_ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+    result = run_node(script)
     assert result.returncode == 0, result.stderr
 
 
@@ -940,13 +914,7 @@ saveQuestionInFlight = null;
 clearEditor();
 if (confirmCalls !== 1) throw new Error('clear stayed blocked after save settled');
 """
-    result = subprocess.run(
-        [node, "-e", script],
-        cwd=PROJECT_ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+    result = run_node(script)
     assert result.returncode == 0, result.stderr
 
 
@@ -1073,13 +1041,7 @@ let peak = 0;
   }}
 }})().catch(error => {{ console.error(error); process.exitCode = 1; }});
 """
-    result = subprocess.run(
-        [node, "-e", script],
-        cwd=PROJECT_ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+    result = run_node(script)
     assert result.returncode == 0, result.stderr
 
 
@@ -1112,8 +1074,13 @@ def test_shared_question_preview_pipeline_is_used_by_editor_and_duplicate_review
     update_start = editor_source.index("const updateContentPreview = () =>")
     update_end = editor_source.index("const updateAnswerPreview = () =>", update_start)
     update_source = editor_source[update_start:update_end]
-    assert "const preparedHtml = renderQuestionPreviewContent(previewContainer, text, { imageLayouts: FigureLayoutState.imageLayouts })" in update_source
-    assert "renderQuestionPreviewContent(paperContainer, text, { preparedHtml: preparedHtml })" in update_source
+    # 断言调用关系，而不是某次排版下的整行字面量：预览必须复用共享管线，
+    # 且第二次调用复用第一次算好的 preparedHtml，不能各自解析一遍。
+    flat_update = " ".join(update_source.split())
+    assert "const preparedHtml = renderQuestionPreviewContent(previewContainer, text, {" in flat_update
+    assert "imageLayouts: FigureLayoutState.imageLayouts" in flat_update
+    assert "renderQuestionPreviewContent(paperContainer, text, {" in flat_update
+    assert "preparedHtml" in flat_update
     assert "renderMathInElement(" not in update_source
 
     scheduler_start = import_source.index("function resetParsedDuplicateCandidateRendering")
@@ -1161,6 +1128,20 @@ def test_parsed_save_generation_prevents_index_reuse_and_stale_callback_in_real_
     save_start = import_source.index("function saveParsedQuestion(index)")
     save_end = import_source.index("function confirmClearAllParsed()", save_start)
     save_source = import_source[save_start:save_end]
+    # saveParsedQuestion 会抓一份入库快照再用它判定代次；快照与查重项的构造函数
+    # 都定义在切片之外，这里按真实实现切进来，桩掉它们会改掉快照内容。
+    snapshot_start = import_source.index("function safeDuplicateImagePaths(paths)")
+    snapshot_end = import_source.index("function buildEditorQuestionDuplicateItem", snapshot_start)
+    snapshot_source = import_source[snapshot_start:snapshot_end]
+    capture_start = import_source.index("function captureParsedQuestionSaveSnapshot(index, q, card)")
+    capture_end = import_source.index("function updateParsedSavedState(index)", capture_start)
+    capture_source = import_source[capture_start:capture_end]
+    # saveParsedQuestion 用 api.js 的 KnowledgePointState 归一份知识点；真实现
+    # 直接注入，别用桩把归一规则的变化挡在外面。
+    api_source = _read(STATIC_JS_DIR / "api.js")
+    knowledge_start = api_source.index("const KnowledgePointState = (() => {")
+    knowledge_end = api_source.index("window.KnowledgePointState = KnowledgePointState;", knowledge_start)
+    knowledge_source = api_source[knowledge_start:knowledge_end]
 
     for start_marker, end_marker, mutation_marker in (
         ("function closeImportModal()", "// PDF & Crop Global States", "performOrphanedTempCropsCleanup"),
@@ -1218,6 +1199,9 @@ function fetch() {{
 }}
 let activeCard = null;
 const document = {{ getElementById(id) {{ return id.startsWith('parsed-card-') ? activeCard : null; }} }};
+{knowledge_source}
+{snapshot_source}
+{capture_source}
 {helpers_source}
 {save_source}
 
@@ -1254,11 +1238,5 @@ const document = {{ getElementById(id) {{ return id.startsWith('parsed-card-') ?
   if (parsedQuestionSaveInFlight.size !== 0) throw new Error('in-flight identities leaked');
 }})().catch(error => {{ console.error(error); process.exitCode = 1; }});
 """
-    result = subprocess.run(
-        [node, "-e", script],
-        cwd=PROJECT_ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+    result = run_node(script)
     assert result.returncode == 0, result.stderr

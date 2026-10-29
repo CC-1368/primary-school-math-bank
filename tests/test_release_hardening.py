@@ -512,8 +512,13 @@ for name in ("Question", "Paper", "PaperQuestion", "QuestionCurriculum"):
     setattr(database, name, dummy)
 sys.modules["mathbank.database"] = database
 
-paths = types.ModuleType("mathbank.paths")
-paths.TEMPLATES_DIR = Path(".")
+# mathbank.paths 只依赖 pathlib，真模块可以直接加载。手工补桩会随着
+# 模块开始使用新的目录常量而反复报“缺常量”，掩盖这里真正要守的东西：
+# 模块级导入不能往旧代码页的 stdout/stderr 写任何东西。
+import importlib.util
+_spec = importlib.util.spec_from_file_location("mathbank.paths", Path("mathbank/paths.py"))
+paths = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(paths)
 sys.modules["mathbank.paths"] = paths
 
 diagnostics = types.ModuleType("mathbank.latex_diagnostics")
@@ -522,6 +527,7 @@ sys.modules["mathbank.latex_diagnostics"] = diagnostics
 
 security = types.ModuleType("mathbank.asset_security")
 security.AssetSecurityError = RuntimeError
+security.SAFE_IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp"})
 security.resolve_upload_asset = lambda *_args, **_kwargs: None
 sys.modules["mathbank.asset_security"] = security
 

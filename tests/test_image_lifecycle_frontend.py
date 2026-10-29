@@ -67,6 +67,7 @@ SOURCES = (
     + section(API, 'let uploadedImages =', 'let contentOcrAbortController')
     + section(EDITOR, 'let subKnowledgeCatalog =', '// Formatting operates')
     + section(IMPORT, '// ocr.js is loaded', 'function findContentTikzImagePath')
+    + section(IMPORT, 'function updateEditorReferencePreviews()', '// Refresh the reference baseline alone.')
     + section(EDITOR, 'function backupEditorState', '// Custom Premium Confirmation Modal')
     + section(EDITOR, 'function getLocalStorageDrafts', 'function selectDraft')
     + 'const editContent=elements.editContent;\n'
