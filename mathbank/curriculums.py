@@ -13,7 +13,10 @@ from mathbank.paths import CURRICULUMS_DIR
 
 
 CURRICULUM_NAMES = {
-    "A": "人教版",
+    "A": "人教A版",
+    "B": "人教B版",
+    "S": "苏教版",
+    "H": "沪教版",
 }
 
 DEFAULT_QUESTION_TYPES = [
