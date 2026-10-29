@@ -4624,7 +4624,7 @@ def ai_classify(content: str = Form(...), answer_markdown: str = Form(""),
             return JSONResponse(content={"status": "error", "message": "当前教材版本已变化，请刷新后重新分类。"}, status_code=409)
         curriculum = copy.deepcopy(get_current_curriculum())
         knowledge_catalog = load_ai_knowledge_catalog(db)
-        expected_book = (expected_compulsory or "").strip()
+        expected_book = expected_compulsory.strip() if isinstance(expected_compulsory, str) else ""
         if expected_book and expected_book not in curriculum:
             return JSONResponse(content={"status": "error", "message": "所选学段不在当前教材大纲中，请刷新页面后重新分类。"}, status_code=400)
         system_instructions = build_classification_system_prompt(curriculum, knowledge_catalog,
