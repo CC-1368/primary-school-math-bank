@@ -533,7 +533,10 @@ def test_word_lower_figure_uses_part_of_the_configured_solution_space(tmp_path):
     )
     assert values
     space_after_cm = int(values[0]) / 1440 * 2.54
-    assert space_after_cm == pytest.approx(1.2, abs=0.05)
+    # 大图按 11cm 宽、2:1 比例排版，实际占高 5.5cm；配置留白 7.0cm 只应
+    # 扣掉图片真实占高，剩余部分用段后距表达。
+    expected_gap_cm = 7.0 - 11.0 / 2
+    assert space_after_cm == pytest.approx(expected_gap_cm, abs=0.05)
     assert diagnostics["missing_images"] == 0
 
 
@@ -982,6 +985,9 @@ def test_create_word_bundle_zip():
     ans_bytes = b"fake_ans_docx"
     zip_bytes = word_export_helper.create_word_bundle_zip("高一数学月考", main_bytes, ans_bytes)
     with zipfile.ZipFile(io.BytesIO(zip_bytes), "r") as archive:
-        assert archive.namelist() == ["高一数学月考.docx", "高一数学月考_含答案与解析.docx"]
+        names = archive.namelist()
+        # 两份试卷固定排在前面，后面跟随合规要求的来源说明文件。
+        assert names[:2] == ["高一数学月考.docx", "高一数学月考_含答案与解析.docx"]
+        assert names[2:] == ["content_sources.json", "CONTENT_SOURCES.txt"]
         assert archive.read("高一数学月考.docx") == main_bytes
         assert archive.read("高一数学月考_含答案与解析.docx") == ans_bytes

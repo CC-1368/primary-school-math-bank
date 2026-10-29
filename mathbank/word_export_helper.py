@@ -1349,19 +1349,27 @@ class WordExamBuilder:
         if is_written_question_type(item.question.get("question_type", "single_choice")) and item.solution_space > 0:
             figure_height_cm = detached_block_height * 2.54
             remaining = max(0.0, item.solution_space - figure_height_cm)
-            # Exact-height blank paragraphs can flow across pages. Paragraph
-            # spacing after one empty paragraph may be discarded or overflow.
-            while remaining > 0.001:
-                chunk = min(2.0, remaining)
+            # 留白优先用定高空段落承载，这样跨页也不会被丢弃；最后一截改用
+            # 段后距表达，避免尾段在页底被压成零高度而丢失作答空间。
+            while remaining > 2.0:
                 spacer = self.doc.add_paragraph()
                 spacer.paragraph_format.space_before = Pt(0)
                 spacer.paragraph_format.space_after = Pt(0)
                 spacer.paragraph_format.line_spacing_rule = WD_LINE_SPACING.EXACTLY
-                spacer.paragraph_format.line_spacing = Cm(chunk)
+                spacer.paragraph_format.line_spacing = Cm(2.0)
                 spacer.paragraph_format.keep_together = False
                 spacer.paragraph_format.keep_with_next = False
                 spacer.paragraph_format.widow_control = False
-                remaining -= chunk
+                remaining -= 2.0
+            if remaining > 0.001:
+                spacer = self.doc.add_paragraph()
+                spacer.paragraph_format.space_before = Pt(0)
+                spacer.paragraph_format.space_after = Cm(remaining)
+                spacer.paragraph_format.line_spacing_rule = WD_LINE_SPACING.EXACTLY
+                spacer.paragraph_format.line_spacing = Pt(1)
+                spacer.paragraph_format.keep_together = False
+                spacer.paragraph_format.keep_with_next = False
+                spacer.paragraph_format.widow_control = False
 
     def _format_question_paragraph(self, paragraph, number: int) -> None:
         paragraph.paragraph_format.left_indent = Cm(0)
