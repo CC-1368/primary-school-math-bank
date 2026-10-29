@@ -1923,11 +1923,17 @@
                         explanation: '视觉核验未能作出明确判断，以下说明无法确认的地方；不表示已经发现错误。', reasons: [evidence]};
             }
             const verification = sourceVerificationForReport(report);
-            const diagnostic = [
-                ...(Array.isArray(verification?.invalid_items) ? verification.invalid_items : []),
-                ...(Array.isArray(verification?.skipped_reasons) ? verification.skipped_reasons : []),
-            ].find(item => item?.question_index === index && typeof item.reason === 'string' && item.reason.trim());
-            const reasons = [...new Set([...(diagnostic ? [diagnostic.reason.trim()] : []), ...originalReasons])];
+            const validItem = item => item?.question_index === index
+                && typeof item.reason === 'string' && item.reason.trim();
+            const invalidItem = (Array.isArray(verification?.invalid_items) ? verification.invalid_items : [])
+                .find(validItem);
+            // 跳过核验的题目只有"为什么没核"这一个结论；本地提取疑点仍可在
+            // 原文依据里查看，堆在这里会让人以为模型已经判定有错。
+            const skippedItem = (Array.isArray(verification?.skipped_reasons) ? verification.skipped_reasons : [])
+                .find(validItem);
+            const reasons = skippedItem
+                ? [skippedItem.reason.trim()]
+                : [...new Set([...(invalidItem ? [invalidItem.reason.trim()] : []), ...originalReasons])];
             return {state: 'not_checked', label: '未完成视觉核验 · 查看提取说明',
                 explanation: verification?.status === 'disabled'
                     ? '本次未启用视觉核验，以下是本地提取时的疑点，不是模型确认的错误。'
@@ -2515,8 +2521,8 @@
                 return Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
             };
             const calls = Object.prototype.hasOwnProperty.call(layout, 'joint_visual_calls')
-                ? `联合识图 ${count('joint_visual_calls')} 次，单独配图定位 ${count('visual_calls')} 次`
-                : `配图定位调用 ${count('visual_calls')} 次`;
+                ? `联合识图 ${count('joint_visual_calls')} 次，单独配图核对 ${count('visual_calls')} 次`
+                : `配图核对调用 ${count('visual_calls')} 次`;
             const prefix = pdfReportReusesSplit(report) || report?.pdf_resume?.reused_layout === true
                 ? '此前图文核对记录：' : 'PDF 图文核对：';
             return prefix + `本地图框检查 ${count('pages_checked')} 页，提取 ${count('figures_extracted')} 张配图，` +
@@ -4800,7 +4806,7 @@
                             } else if (task.status === 'source_verification') {
                                 subText.textContent = task.document_type === 'docx'
                                     ? '正在自动核验 Word 原文疑点，确认无误后不再提示。'
-                                    : '正在对照原页核验疑点，未确认的内容保留说明，不改写已保存的本地正文。';
+                                    : '正在自动核验原页疑点，未确认的内容保留说明，不改写已保存的本地正文。';
                             } else if (task.status === 'layout_analysis') {
                                 subText.textContent = '正在对照原页提取配图并核对归属，不确定的图片将保留供人工核对...';
                             } else if (task.status === 'extracting_docx' || (task.log && task.log.includes('OMML'))) {
