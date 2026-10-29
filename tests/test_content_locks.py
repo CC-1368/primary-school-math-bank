@@ -86,7 +86,8 @@ def test_docx_task_restores_formula_before_returning_questions():
     task = DOCUMENT_TASKS.snapshot(task_id)
     DOCUMENT_TASKS.remove(task_id)
     assert task["status"] == "completed"
-    assert task["data"][0]["content"] == r"1. 已知 $f(x)=x^2+1$，求最小值。"
+    # 题号属于卷面排版，交付前会被剥掉（题号不入库）。
+    assert task["data"][0]["content"] == r"已知 $f(x)=x^2+1$，求最小值。"
     assert task["diagnostics"]["math_locks_restored"] == 1
 
 
