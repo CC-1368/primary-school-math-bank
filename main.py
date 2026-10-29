@@ -4924,7 +4924,15 @@ def parse_paper_text_internal(
 
 
 def validate_import_knowledge(questions: list[dict], curriculum: dict, *, diagnostics=None) -> None:
-    """Preserve imported source bodies while flagging uncertain placement."""
+    """Preserve imported source bodies while flagging uncertain placement.
+
+    采纳前逐题做严格目录校验：章节名冒充小节、跨教材/跨章节小节、未知学段
+    或畸形值直接拒绝；完全未分类的题目仍走宽松归一并标记审阅。
+    """
+    from mathbank.import_classification import validate_strict_category
+    for question in questions if isinstance(questions, list) else []:
+        if isinstance(question, dict):
+            validate_strict_category(question, curriculum)
     normalize_import_classifications(questions, curriculum, diagnostics)
 
 

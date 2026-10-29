@@ -1008,6 +1008,28 @@ def build_source_metadata_messages(plan: dict, curriculum: dict, knowledge_catal
     return [{"role": "system", "content": instructions}, {"role": "user", "content": data}]
 
 
+def _validate_strict_categories(row: dict, curriculum: dict) -> None:
+    """采纳前的严格目录校验：学段、章节必须在目录内，小节必须是真实叶子。
+
+    与 normalize_import_classifications 的"宽松归一 + 审阅标记"不同，模型
+    返回的元数据在采纳前必须逐字段对得上目录：未知章节、把章节名当小节、
+    跨章节小节都直接拒绝，交由上层的有界重试处理。
+    """
+    book = row.get("category_compulsory", "")
+    chapter = row.get("category_chapter", "")
+    knowledge = row.get("category_knowledge", "")
+    chapters = (curriculum or {}).get(book)
+    if not isinstance(chapters, dict):
+        raise SourceMetadataContractError("元数据学段不在教材目录内。")
+    sections = chapters.get(chapter)
+    if not isinstance(sections, (list, tuple, dict)):
+        raise SourceMetadataContractError("元数据章节不在教材目录内。")
+    if knowledge:
+        section_names = set(sections) if isinstance(sections, dict) else set(sections)
+        if knowledge == chapter or knowledge not in section_names:
+            raise SourceMetadataContractError("元数据小节必须是该章节下的真实叶子小节。")
+
+
 def apply_source_metadata_response(parsed: dict, plan: dict, curriculum: dict, *,
                                    normalize_fillin: Callable[[str], str] | None = None,
                                    knowledge_catalog=None) -> list[dict]:
@@ -1049,6 +1071,7 @@ def apply_source_metadata_response(parsed: dict, plan: dict, curriculum: dict, *
         else:
             # Source IDs/body/type contracts remain strict; uncertain optional
             # labels must not cause a paid full-source rewrite or discard text.
+            _validate_strict_categories(row, curriculum)
             normalize_import_classifications([row], curriculum)
         if known[identifier]["has_choices"] and row["question_type"] not in {"single_choice", "multi_choice"}:
             raise SourceMetadataContractError("元数据题型与原卷选择题结构不一致。")

@@ -217,6 +217,36 @@ def _normalize_question(question: dict, catalogue: dict, signature: tuple) -> No
     question["classification_review"] = review
 
 
+def validate_strict_category(row: dict, curriculum: dict) -> None:
+    """导入/采纳边界：分类标签必须逐字段对上当前教材目录。
+
+    与 normalize_import_classifications 的"宽松归一 + 审阅标记"不同，这里
+    面向模型输出的采纳前校验：把章节名当小节、跨教材/跨章节小节、未知学段
+    或章节、None 之类的畸形值都直接拒绝（ValueError），由上层有界重试或
+    导入预检处理。字段全部为空视为"未分类"，不在本校验范围内。
+    """
+    for field in ("category_compulsory", "category_chapter", "category_knowledge"):
+        if field in row and row[field] is not None and not isinstance(row[field], str):
+            raise ValueError(f"分类字段 {field} 必须是字符串。")
+    if row.get("category_knowledge", "") is None:
+        raise ValueError("小节标签不能为空值。")
+    book = row.get("category_compulsory", "") or ""
+    chapter = row.get("category_chapter", "") or ""
+    knowledge = row.get("category_knowledge", "") or ""
+    if not book and not chapter and not knowledge:
+        return
+    chapters = (curriculum or {}).get(book)
+    if not isinstance(chapters, dict):
+        raise ValueError("学段不在教材目录内。")
+    sections = chapters.get(chapter)
+    if not isinstance(sections, (list, tuple, dict)):
+        raise ValueError("章节不在教材目录内。")
+    if knowledge:
+        names = set(sections) if isinstance(sections, dict) else set(sections)
+        if knowledge == chapter or knowledge not in names:
+            raise ValueError("小节必须是所选章节下的真实叶子小节。")
+
+
 def normalize_import_classifications(
     questions: list[dict], curriculum: dict, diagnostics: dict | None = None,
 ) -> None:
