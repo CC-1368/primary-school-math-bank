@@ -661,7 +661,8 @@ def verify_docx_source_suspicions(questions, diagnostics, source, evidence, *, c
                 provider=provider, request=post_chat_completion, attachments=repair_attachments,
                 verification_content=recheck_content, parse_verdicts=repair_verdicts, validate_output=validate_repair,
                 check_evidence=check_repair_evidence, check_cancelled=check_cancelled,
-                budget=repair_budget, max_chars=MAX_CHARS, max_output_tokens=MAX_OUTPUT_TOKENS, progress=progress)
+                budget=repair_budget, max_chars=MAX_CHARS, max_output_tokens=MAX_OUTPUT_TOKENS, progress=progress,
+                timeout_seconds=WORD_REVIEW_TIMEOUT_SECONDS)
             report['calls'] += repair['calls']
             if repair['repairs']:
                 for key in ('repair_calls', 'recheck_calls'):
