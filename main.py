@@ -7486,7 +7486,12 @@ def run_docx_parsing_task(
                 )
         if parsed_questions is None:
             DOCUMENT_TASKS.check_cancelled(task_id)
-            fallback_kwargs = {"check_cancelled": lambda: DOCUMENT_TASKS.check_cancelled(task_id)}
+            fallback_kwargs = {
+                "check_cancelled": lambda: DOCUMENT_TASKS.check_cancelled(task_id),
+                # Word 解析的重试在本进程内分层处理，整卷回退只补一次，
+                # 不再叠加 HTTP 层的连接重试，否则一次失败会重复计费。
+                "connection_retry": False,
+            }
             parsed_questions = parse_paper_text_internal(
                 locked_markdown_content,
                 False,  # Extract original answers; solve reviewed questions in the frontend.
