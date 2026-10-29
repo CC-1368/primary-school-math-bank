@@ -1,6 +1,7 @@
 """Preserve reliable native content through both PDF import strategies."""
 
 from types import SimpleNamespace
+import re
 import uuid
 
 import pymupdf as fitz
@@ -56,7 +57,9 @@ def test_complete_native_source_does_not_call_any_vision_stage(monkeypatch, stra
         task = main.DOCUMENT_TASKS.snapshot(task_id)
         assert task['status'] == 'completed', task.get('error')
         assert len(split_inputs) == 1
-        assert task['data'][0]['content'] == source
+        # 题干入库时按产品规则剥掉原卷题号（导出排版时统一编号），除此之外
+        # 原生文字必须一字不差地传下来。原页 markdown 仍保留含题号的原文。
+        assert task['data'][0]['content'] == re.sub(r'^\s*\d+\s*[.．、]\s*', '', source)
         assert task['pdf_source_pages'][0]['markdown'].endswith(source)
         report = task['diagnostics']['pdf_extraction']
         assert report['native_pages'] == 1

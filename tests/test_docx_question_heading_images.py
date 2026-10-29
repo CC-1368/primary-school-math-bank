@@ -102,12 +102,27 @@ def test_administrative_score_shell_cannot_override_an_unknown_anchor(tmp_path):
     assert result['diagnostics']['heading_image_ownership'][0]['reason']=='vertical_reference_not_paragraph'
 
 
+def test_chart_payload_reports_conversion_and_ownership_separately(tmp_path):
+    # 图表载荷本身没转出来，同时这张浮图的归属也不确定——两件事都要各自
+    # 留一条核对记录，不能合并成一条把其中一半信息丢掉。
+    result=extract(tmp_path,picture(other='<a:chart/>'))
+    assert result['diagnostics']['review_required']==2
+    assert result['diagnostics']['images_unavailable']==1
+    ownership=result['diagnostics']['heading_image_ownership'][0]
+    assert ownership['status']=='ownership_uncertain'
+    assert ownership['reason']=='picture_contains_nonraster_content'
+    assert result['diagnostics']['drawing_review_details'][0]['reasons']==['native_chart_or_diagram_not_converted']
+    warnings=result['diagnostics']['warnings']
+    assert any('未能完整转换' in message for message in warnings)
+    assert any(ownership['image_path'] in message for message in warnings)
+
+
 @pytest.mark.parametrize('kwargs',[
     {'y':'-1'},{'x':'-1'},{'vertical':'page'},{'horizontal':'page'},
     {'y':'1601'},{'height':'0'},{'height':'invalid'},{'y':'invalid'},
     {'y':'2147483648'},{'behind':'1'},{'carrier':'inline'},
     {'other':'<w:txbxContent><w:p><w:r><w:t>上题说明</w:t></w:r></w:p></w:txbxContent>'},
-    {'other':'<a:chart/>'},{'other':'<a:svgBlip/>'},
+    {'other':'<a:svgBlip/>'},
 ])
 def test_uncertain_heading_anchor_is_not_reassigned_and_blocks_certification(tmp_path,kwargs):
     result=extract(tmp_path,picture(**kwargs))

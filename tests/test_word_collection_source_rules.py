@@ -120,7 +120,6 @@ def test_unproven_inline_numbers_still_veto_combined_questions(body):
 
 
 @pytest.mark.parametrize("native", [
-    r"\fillin\underline{▲}\fillin",
     r"\underline{不能删除的原文字}",
     r"\underline{数值\textbf{21}与\{可见括号\}}",
     r"\underline{尚未闭合的原文字",
@@ -135,6 +134,37 @@ def test_source_underline_contents_survive_a_destructive_legacy_fillin_formatter
     assert result == normalize_source_fillin(result, legacy)
     if native.endswith("}"):
         assert "另填 " + r"\fillin" in result
+
+
+def test_triangle_placeholder_cluster_collapses_to_one_fillin():
+    r"""FILLIN_STYLE_RULE: \fillin\underline{▲}\fillin 是一个作答位，不是原文。
+
+    三角占位符夹在两条完整体填空横线之间时，三条线是同一个作答位的装饰，
+    按 mathbank.prompts.FILLIN_STYLE_RULE 收敛为单个 \fillin；真正用于
+    几何说明的 ▲ 不带左右横线，仍然原样保留。
+    """
+    import re
+    def legacy(value):
+        return re.sub(r"\\underline\s*\{[^}]*?\}", lambda _: r"\fillin", value).replace("____", r"\fillin")
+    source = "保留 " + r"\fillin\underline{▲}\fillin" + "，另填 ____。"
+    result = normalize_source_fillin(source, legacy)
+    assert result == "保留 " + r"\fillin" + "，另填 " + r"\fillin" + "。"
+    assert result == normalize_source_fillin(result, legacy)
+
+
+@pytest.mark.parametrize("native", [
+    r"\underline{▲}",
+    r"如图$\triangle ABC$中，$AB=AC$。",
+    r"\fillin\underline{▲ 说明文字}\fillin",
+])
+def test_triangle_geometric_marks_are_not_collapsed(native):
+    import re
+    def legacy(value):
+        return re.sub(r"\\underline\s*\{[^}]*?\}", lambda _: r"\fillin", value).replace("____", r"\fillin")
+    source = "保留 " + native + "，另填 ____。"
+    result = normalize_source_fillin(source, legacy)
+    assert native in result
+    assert result == normalize_source_fillin(result, legacy)
 
 
 @pytest.mark.parametrize("native", [

@@ -232,7 +232,10 @@ def test_v10_migration_backup_unchanged_old_fields_empty_relation_idempotent_fk(
             connection.exec_driver_sql("INSERT INTO question_curriculums(id,question_id,version_code,knowledge) VALUES(1,1,'A','8. 立体几何初步'),(2,1,'B','历史B标签')")
         monkeypatch.setattr(db_migrations, "SCHEMA_SNAPSHOT_DIR", tmp_path / "snapshots")
         result = db_migrations.migrate_database(engine)
-        assert result["from_version"] == 10 and result["to_version"] == 11 and result["backup"]
+        # 从 v10 起迁移会一路补齐到当前 schema，断言目标版本而不是写死 11。
+        assert (result["from_version"] == 10
+                and result["to_version"] == db_migrations.LATEST_SCHEMA_VERSION
+                and result["backup"])
         with sqlite3.connect(result["backup"]) as original:
             assert original.execute("PRAGMA user_version").fetchone()[0] == 10
             assert original.execute("SELECT category_knowledge,tags FROM questions").fetchone() == ("8. 立体几何初步", "旧标签")

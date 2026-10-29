@@ -252,5 +252,6 @@ def test_pdf_task_completion_executed_tail_preserves_partial_flag_and_notice(par
     assert len(captured)==1
     kwargs=captured[0][1]
     assert kwargs['partial'] is partial and kwargs['data'] is data and kwargs['diagnostics'] is diagnostics
-    assert ('部分疑点题组未完成' in kwargs['log']) is partial
+    # 部分完成时，日志必须点明还有题组没核完，用户才知道要回去看原文。
+    assert ('部分疑点题组仍需校对' in kwargs['log']) is partial
     assert kwargs['document_type']=='pdf' and kwargs['page_numbers']==[1]
