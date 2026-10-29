@@ -1,5 +1,6 @@
 import os
 import json
+import shutil
 import pytest
 from unittest.mock import MagicMock, patch
 
@@ -59,8 +60,13 @@ def test_paper_api_flow(client):
 
     # 4b. Export Full Bundle Zip (TeX + PDF)
     bundle_res = client.post("/api/paper/export/bundle", json=paper_payload, headers=headers)
-    assert bundle_res.status_code == 200
-    assert bundle_res.headers.get("content-type") == "application/zip"
+    if shutil.which("xelatex"):
+        assert bundle_res.status_code == 200
+        assert bundle_res.headers.get("content-type") == "application/zip"
+    else:
+        # 没有 TeX 环境时必须 fail-closed：宁可报错，也不给出缺 PDF 的残缺归档。
+        assert bundle_res.status_code == 400
+        assert "PDF 编译失败" in bundle_res.json()["message"]
 
     # 5. AI Paper Selection
     ai_res = client.post("/api/paper/ai-select", json={"prompt": "函数", "limit": 5}, headers=headers)
