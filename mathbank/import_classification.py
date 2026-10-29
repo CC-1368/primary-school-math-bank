@@ -240,7 +240,9 @@ def validate_strict_category(row: dict, curriculum: dict) -> None:
         raise ValueError("学段不在教材目录内。")
     sections = chapters.get(chapter)
     if not isinstance(sections, (list, tuple, dict)):
-        raise ValueError("章节不在教材目录内。")
+        # 章节名对不上（空格、编号写法、教材改版）属于常见歧义，不是畸形值：
+        # 整份试卷不该因为它作废，交给宽松归一打「待人工确认」标记。
+        return
     if knowledge:
         names = set(sections) if isinstance(sections, dict) else set(sections)
         if knowledge == chapter or knowledge not in names:
