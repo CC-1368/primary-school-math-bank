@@ -563,7 +563,12 @@ def test_paper_figure_size_presets_and_auto_wide_resolution_are_executable():
 
     node = shutil.which("node")
     assert node, "Node.js is required for the frontend executable regression"
-    script = helper_source + r'''
+    # 片段从 shouldPreserveInlinePaperImages 起截取，A4_PAGE 在其上方定义，单独带上。
+    a4_declaration = next(
+        line.strip() for line in paper_source.splitlines()
+        if "const A4_PAGE = Object.freeze" in line
+    )
+    script = a4_declaration + "\n" + helper_source + r'''
 global.window = {
   parseMarkdownWithMath: value => value,
   MathBankSafe: {
@@ -1268,7 +1273,7 @@ def test_ai_classification_requires_manual_single_or_multi_choice_confirmation()
     assert 'role="radiogroup"' in index_source
     assert index_source.count("question-type-choice-check") == 2
     assert "已识别为选择题，请手动确认" in index_source
-    assert "确认分类并保存题目" in index_source
+    assert "应用分类并保存题目" in index_source
     assert '.question-type-choice-button[aria-checked="true"]:hover' in css_source
     assert 'color: #ffffff;' in css_source
     assert '.question-type-choice-button[aria-checked="true"] .question-type-choice-check' in css_source
@@ -1420,9 +1425,10 @@ def test_dashboard_workspace_reuses_read_only_metrics_and_existing_workflows():
         "dashboardWorkspaceSection",
         "dashboardTitle",
         "dashboardQuestionTotal",
-        "dashboardReviewCount",
+        "dashboardQuestionTotalMeta",
+        "dashboardChallengeCount",
+        "dashboardNormalCount",
         "dashboardPaperCount",
-        "dashboardMonthAdditions",
         "dashboardTaskList",
         "dashboardActivityList",
     ):
@@ -1503,7 +1509,8 @@ const cases = [
     });
     vm.runInContext(source, context);
     await context.window.loadDashboardData();
-    assert.equal(nodes.get('dashboardMonthAdditions').textContent, String(expected), instant);
+    // 月度新增挂在总数卡片的副标题上，不再单独占一个统计格。
+    assert.equal(nodes.get('dashboardQuestionTotalMeta').textContent, `本月新增 ${expected} 道题目`, instant);
     assert.ok(nodes.get('dashboardActivityList').innerHTML.includes(`本月新增题目 ${expected} 道`), instant);
   }
 })().catch(error => { console.error(error); process.exitCode = 1; });
@@ -1865,7 +1872,7 @@ def test_paper_question_answers_are_collapsible_and_loaded_on_demand():
         "window.togglePaperQuestionAnswer",
         "window.collapseAllPaperAnswers",
         "fetch(`/api/questions/${qid}`)",
-        "window.parseMarkdownWithMath(answerText)",
+        "window.parseMarkdownWithMath(answerText, {}, {",
         'aria-expanded="${answerExpanded ? \'true\' : \'false\'}"',
         "参考答案与解析",
         "收起全部答案",
@@ -2045,6 +2052,17 @@ function seedPaperAnswerCache(question) {
 }
 function renderPart3QuestionStream() {}
 window.renderPaperCanvas = function() {};
+// 知识点筛选参数由 KnowledgePointState 统一追加，这里给出等形桩，
+// 保证断言仍只针对分页参数本身。
+global.KnowledgePointState = {
+  filter() {
+    return {
+      knowledge_point_codes: [], knowledge_point_mode: '', knowledge_point_role: '',
+      knowledge_point_status: '', knowledge_point_unlabeled: false
+    };
+  },
+  appendParams(params) { return params; }
+};
 global.console = { ...console, error() {} };
 
 function deferred() {

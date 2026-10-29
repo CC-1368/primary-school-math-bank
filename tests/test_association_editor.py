@@ -60,6 +60,11 @@ const fetch = async (url, options = {}) => {
   }
   if (options.method === 'POST') { linked = true; return response({status: 'success'}); }
   if (options.method === 'DELETE') { linked = false; return response({status: 'success'}); }
+  if (url.startsWith('/api/questions/association-candidates')) {
+    const exclude = Number(new URL(url, 'http://local').searchParams.get('exclude_id') || 0);
+    const items = all.filter(q => q.id !== exclude);
+    return response({items, page: 1, total_pages: 1});
+  }
   return response(url === '/api/questions' ? all : linked ? [all.find(q => q.id !== EditorState.questionId)] : []);
 };
 const flush = () => new Promise(resolve => setImmediate(resolve));
@@ -114,11 +119,15 @@ function clean(id = 17) {
   // Preserve newer selections during both stages of association hydration.
   for (const stage of ['associated', 'options']) {
     clean(); linked = true;
-    const delayed = pause(url => stage === 'associated' ? url.endsWith('/associated') : url === '/api/questions');
-    const pending = loadAssociatedQuestionsInList(17);
+    // 先完成 hydration 建立基线关联，再由候选分页接口独立加载下拉选项。
+    if (stage === 'options') await loadAssociatedQuestionsInList(17);
+    const delayed = pause(url => stage === 'associated' ? url.endsWith('/associated') : url.startsWith('/api/questions/association-candidates'));
+    const pending = stage === 'options'
+      ? loadRelatedQuestionCandidates({query: '', page: 1}) : loadAssociatedQuestionsInList(17);
     await flush();
     dropdown.value = '31';
-    delayed.resolve(response(stage === 'associated' ? [all[1]] : all));
+    delayed.resolve(response(stage === 'associated' ? [all[1]]
+      : {items: all, page: 1, total_pages: 1}));
     await pending;
     assert.equal(dropdown.value, '31', stage + ' must preserve later selection');
     assert.equal(isEditorModified(), true);
@@ -146,15 +155,17 @@ function clean(id = 17) {
   for (const stage of ['associated', 'options', 'POST', 'DELETE']) {
     clean(); linked = true;
     const delayed = pause((url, options) => stage === 'associated' ? url.endsWith('/associated')
-      : stage === 'options' ? url === '/api/questions' : options.method === stage);
+      : stage === 'options' ? url.startsWith('/api/questions/association-candidates') : options.method === stage);
     if (stage === 'POST') dropdown.value = '23';
     const pending = stage === 'POST' ? associateRelatedQuestion()
-      : stage === 'DELETE' ? clearRelatedQuestion() : loadAssociatedQuestionsInList(17);
+      : stage === 'DELETE' ? clearRelatedQuestion()
+      : stage === 'options' ? loadRelatedQuestionCandidates({query: '', page: 1})
+      : loadAssociatedQuestionsInList(17);
     await flush();
     clean(23); clean(17);
     dropdown.value = '31'; backupEditorState(17);
     delayed.resolve(response(stage === 'associated' ? [all[1]]
-      : stage === 'options' ? all : {status: 'success'}));
+      : stage === 'options' ? {items: all, page: 1, total_pages: 1} : {status: 'success'}));
     await pending;
     assert.equal(dropdown.value, '31', stage + ' response must not touch new session');
     assert.equal(isEditorModified(), false);

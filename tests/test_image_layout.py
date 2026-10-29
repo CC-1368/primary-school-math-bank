@@ -202,7 +202,9 @@ const container={style:{},querySelectorAll(){return images;},appendChild(){}};
 '''+helpers+f'\napplyEditorFigureLayoutPreview(container, {json.dumps(SOURCE)});'+'''
 if(images[0].dataset.editorImageKey!=='a.png') throw Error('missing individual control');
 if(images[1].dataset.editorImageKey!=='') throw Error('missing trailing group control');
-if(images[1].style.maxHeight!=='240px') throw Error('trailing group size was ignored');
+// 尺寸档位以 ImageLayoutTools 为唯一来源（cm × px/cm），不再写死像素值。
+const expected=window.ImageLayoutTools.sizeDimensions('detached','medium').maxHeight+'px';
+if(images[1].style.maxHeight!==expected) throw Error('trailing group size was ignored: '+images[1].style.maxHeight+' vs '+expected);
 '''
     result=subprocess.run([shutil.which('node'),'-e',script],capture_output=True,text=True)
     assert result.returncode==0,result.stderr
