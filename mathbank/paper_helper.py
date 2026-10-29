@@ -56,17 +56,21 @@ def _with_content_source_pdf_metadata(pdf_bytes: bytes, notice: str) -> bytes:
     """Attach scoped credits to document metadata without touching page content."""
     import pymupdf
 
-    with pymupdf.open(stream=pdf_bytes, filetype="pdf") as document:
-        keys = {"title", "author", "subject", "keywords", "creator", "producer",
-                "creationDate", "modDate", "trapped"}
-        metadata = {key: value for key, value in (document.metadata or {}).items() if key in keys}
-        subject = metadata.get("subject", "") or ""
-        notice = notice.rstrip()
-        if notice in subject:
-            return pdf_bytes
-        metadata["subject"] = subject.rstrip() + ("\n\n" if subject else "") + notice
-        document.set_metadata(metadata)
-        return document.tobytes()
+    try:
+        with pymupdf.open(stream=pdf_bytes, filetype="pdf") as document:
+            keys = {"title", "author", "subject", "keywords", "creator", "producer",
+                    "creationDate", "modDate", "trapped"}
+            metadata = {key: value for key, value in (document.metadata or {}).items() if key in keys}
+            subject = metadata.get("subject", "") or ""
+            notice = notice.rstrip()
+            if notice in subject:
+                return pdf_bytes
+            metadata["subject"] = subject.rstrip() + ("\n\n" if subject else "") + notice
+            document.set_metadata(metadata)
+            return document.tobytes()
+    except Exception:
+        # 来源标注只是附属信息，写不进去也要保住已经编译成功的 PDF。
+        return pdf_bytes
 
 # Only these known, offline TeX Live packages may be inserted automatically.
 # A model response can never add a package to this allowlist at runtime.
