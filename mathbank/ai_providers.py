@@ -475,7 +475,12 @@ def resolve_ocr_provider(
 ) -> MultimodalProviderConfig:
     """Resolve one OCR engine and its engine-specific model setting."""
 
-    environment = os.environ if environ is None else environ
+    raw_environment = os.environ if environ is None else environ
+    # 空值等同「未配置」：.env 模板里常写成 `SOME_BASE_URL=`，若按显式配置处理
+    # 就会用空串顶掉默认地址，最终表现为「识图服务未配置」。
+    environment = {
+        key: value for key, value in raw_environment.items() if value not in (None, "")
+    }
     normalized_engine = str(engine or "siliconflow").strip().lower()
 
     if normalized_engine == "deepseek":
