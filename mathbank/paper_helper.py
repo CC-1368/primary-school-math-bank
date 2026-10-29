@@ -260,7 +260,12 @@ def _place_export_choice_paren(text: str, visual_tokens: set[str], *, append: bo
     source examples cannot provide an option boundary or an answer blank.
     Only an empty terminal placeholder is removed; meaningful parentheses
     and placeholders in earlier prose/structures are retained.
+
+    选择题的作答位最终印成一个全角（　）：题干里残留的 \\fillin、
+    下划线、\\paren、空括号先收敛成一个括号；没有作答位才补一个。
     """
+    from .choice_parens import PAREN, _convert_stem, _insert_missing_slot
+
     def mask(value: str) -> str:
         return "".join(char if char in "\r\n" else " " for char in value)
 
@@ -279,13 +284,14 @@ def _place_export_choice_paren(text: str, visual_tokens: set[str], *, append: bo
         visual_start = len(before) - len(token)
     prose_end = len(stem[:visual_start].rstrip())
     prose, figures = stem[:prose_end], stem[prose_end:]
+    prose = _convert_stem(prose)
     blank = r"(?:\\quad|\\qquad|\\hspace\{[^{}]*\}|[\s\xa0\u3000_])*"
     plain = rf"[(（]{blank}[)）]"
     dollar_blank = rf"\${blank}\$"
     tex_blank = rf"\\\({blank}\\\)"
     empty = (
         rf"(?:\${plain}\$|\\\({plain}\\\)|"
-        rf"[(（](?:{dollar_blank}|{tex_blank})[)）]|{tex_blank}|{plain}|\\paren\b)\s*$"
+        rf"[(（](?:{dollar_blank}|{tex_blank})[)）]|{tex_blank}|{plain}|\\paren\b|\\fillin\b\*?|_{{3,}})\s*$"
     )
     while match := re.search(empty, prose):
         # An escaped delimiter belongs to the source, not to the blank syntax.
@@ -296,7 +302,7 @@ def _place_export_choice_paren(text: str, visual_tokens: set[str], *, append: bo
     if prose.endswith("$") and len(re.findall(r"(?<!\\)\$", prose)) % 2:
         prose = prose[:-1].rstrip()
     if append:
-        prose += r" \paren"
+        prose = _insert_missing_slot(prose) if PAREN not in prose else prose
     return prose + figures + ("\n" if rest else "") + rest
 
 

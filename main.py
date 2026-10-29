@@ -3061,11 +3061,19 @@ def _log_import_failure(operation: str, detail: str) -> None:
         pass
 
 
-def normalize_fillin_macro(text: str) -> str:
+def normalize_fillin_macro(
+    text: str,
+    keep_choice_parens: bool | None = None,
+    add_choice_slot_if_missing: bool = True,
+) -> str:
     """Normalize proven blank lines; preserve literal TeX, subscripts and macros.
 
     Keep the legacy callable available to internal tools; new math-shell
     handling lives in the shared backend module and never migrates old rows.
+
+    keep_choice_parens=True 时，题干里的作答位（\\fillin、下划线、\\paren、
+    空括号）进一步收敛为全角（　）；None/False 保持历史 \\fillin 行为。
+    add_choice_slot_if_missing=False 只收敛、不补括号（手工编辑场景）。
     """
     if not text or not isinstance(text, str):
         return text or ""
@@ -3238,7 +3246,11 @@ def normalize_fillin_macro(text: str) -> str:
     result.append(normalize_segment(text[cursor:], cursor))
     from mathbank.fillin import normalize_fillin_math_wrappers
     from mathbank.fillin_placeholders import normalize_fillin_placeholder_clusters
-    return normalize_fillin_placeholder_clusters(normalize_fillin_math_wrappers("".join(result)))
+    normalized = normalize_fillin_placeholder_clusters(normalize_fillin_math_wrappers("".join(result)))
+    if keep_choice_parens:
+        from mathbank.choice_parens import convert_choice_answer_slots
+        return convert_choice_answer_slots(normalized, add_missing=add_choice_slot_if_missing)
+    return normalized
 
 
 def committed_question_response(
